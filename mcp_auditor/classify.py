@@ -1,0 +1,177 @@
+"""Deterministic blast-radius classification for MCP tool descriptors."""
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from typing import Sequence
+
+from .types import ClearanceLevel, McpToolDescriptor, ToolRisk, max_clearance
+
+# Word-boundary token matching keeps "list_orders" READ_ONLY while flagging
+# "delete_order" / "create_order" as mutating.
+
+DEFAULT_DESTRUCTIVE_TERMS = frozenset(
+    {
+        "delete", "drop", "truncate", "wipe", "destroy", "remove", "purge", "erase",
+        "unlink", "revoke", "terminate", "kill", "format", "deprovision", "uninstall",
+        "transfer", "withdraw", "pay", "payment", "refund", "charge", "wire",
+        "sudo", "exec", "execute", "shell", "eval", "spawn", "rmdir", "rm",
+        "force", "reset", "overwrite", "rollback", "shutdown", "reboot",
+        # "send" alone is too noisy (send_notification); keep money/exfil verbs.
+        "exfiltrate", "exfil",
+    }
+)
+
+DEFAULT_STATE_CHANGING_TERMS = frozenset(
+    {
+        "create", "update", "write", "set", "put", "post", "patch", "insert", "upsert",
+        "modify", "edit", "move", "rename", "append", "email", "message", "publish",
+        "push", "commit", "merge", "approve", "assign", "schedule", "upload", "install",
+        "enable", "disable", "configure", "grant", "add", "register", "provision",
+        "deploy", "invite", "subscribe", "trigger", "run", "start", "stop", "restart",
+        "send",  # outbound side-effect; HITL by default
+    }
+)
+
+DEFAULT_READ_ONLY_TERMS = frozenset(
+    {
+        "get", "list", "read", "search", "query", "fetch", "find", "view", "show",
+        "describe", "lookup", "count", "status", "health", "info", "retrieve",
+        "inspect", "preview", "summarize", "explain", "analyze", "check",
+    }
+)
+
+_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+
+
+def _fold(text: str) -> str:
+    # NFKC folds compatibility forms (fullwidth "ＤＥＬＥＴＥ") onto ASCII before
+    # matching; homoglyphs from other scripts are not folded (see classify_tool).
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def tokens(*texts: str) -> set[str]:
+    """Lowercase alphanumeric word tokens of the given texts."""
+    bucket: set[str] = set()
+    for text in texts:
+        if not text or not isinstance(text, str):
+            continue
+        bucket.update(_TOKEN_PATTERN.findall(_fold(text)))
+    return bucket
+
+
+def _terms(values: Sequence[str] | None) -> frozenset[str]:
+    # Tokens are folded to lowercase, so extra terms must be too or they never match.
+    return frozenset(_fold(v) for v in (values or ()) if isinstance(v, str))
+
+
+@dataclass
+class ClassificationPolicy:
+    """Optional host-tunable verb sets (defaults are fail-closed for mutations)."""
+
+    destructive_terms: frozenset[str] = DEFAULT_DESTRUCTIVE_TERMS
+    state_changing_terms: frozenset[str] = DEFAULT_STATE_CHANGING_TERMS
+    read_only_terms: frozenset[str] = DEFAULT_READ_ONLY_TERMS
+    empty_surface_clearance: ClearanceLevel = ClearanceLevel.DRAFT_ONLY
+    # If True, destructive tools raise server floor to BLOCKED (strict mode).
+    block_destructive: bool = False
+
+    def __post_init__(self) -> None:
+        self.destructive_terms = _terms(self.destructive_terms)
+        self.state_changing_terms = _terms(self.state_changing_terms)
+        self.read_only_terms = _terms(self.read_only_terms)
+
+    def with_extra(
+        self,
+        *,
+        destructive: Sequence[str] | None = None,
+        state_changing: Sequence[str] | None = None,
+        read_only: Sequence[str] | None = None,
+    ) -> ClassificationPolicy:
+        return ClassificationPolicy(
+            destructive_terms=self.destructive_terms | _terms(destructive),
+            state_changing_terms=self.state_changing_terms | _terms(state_changing),
+            read_only_terms=self.read_only_terms | _terms(read_only),
+            empty_surface_clearance=self.empty_surface_clearance,
+            block_destructive=self.block_destructive,
+        )
+
+
+DEFAULT_POLICY = ClassificationPolicy()
+
+
+def classify_tool(
+    tool: McpToolDescriptor,
+    policy: ClassificationPolicy | None = None,
+) -> ToolRisk:
+    pol = policy or DEFAULT_POLICY
+    tok = tokens(tool.name, tool.description)
+    destructive_hits = sorted(tok & pol.destructive_terms)
+    state_hits = sorted(tok & pol.state_changing_terms)
+
+    if destructive_hits:
+        clearance = (
+            ClearanceLevel.BLOCKED if pol.block_destructive else ClearanceLevel.DRAFT_ONLY
+        )
+        return ToolRisk(
+            name=tool.name,
+            category="destructive",
+            clearance=clearance,
+            signals=[f"destructive verb: {hit}" for hit in destructive_hits],
+            description=tool.description,
+        )
+    if state_hits:
+        return ToolRisk(
+            name=tool.name,
+            category="state_changing",
+            clearance=ClearanceLevel.DRAFT_ONLY,
+            signals=[f"state-changing verb: {hit}" for hit in state_hits],
+            description=tool.description,
+        )
+    name = tool.name if isinstance(tool.name, str) else ""
+    if not name.isascii():
+        # Non-ASCII letters in a name can hide a verb from the token matcher
+        # (Cyrillic "е" in "dеlete"), so such a name never earns READ_ONLY.
+        return ToolRisk(
+            name=tool.name,
+            category="state_changing",
+            clearance=ClearanceLevel.DRAFT_ONLY,
+            signals=["non-ASCII characters in tool name; defaulting to human review"],
+            description=tool.description,
+        )
+    read_hits = sorted(tok & pol.read_only_terms)
+    if read_hits:
+        return ToolRisk(
+            name=tool.name,
+            category="read_only",
+            clearance=ClearanceLevel.READ_ONLY,
+            signals=[f"read-only verb: {hit}" for hit in read_hits],
+            description=tool.description,
+        )
+    # Unknown verbs are NOT treated as read-only — that was a false-negative
+    # hole (e.g. customer_sync / blob_handoff). Fail closed to human review.
+    return ToolRisk(
+        name=tool.name,
+        category="state_changing",
+        clearance=ClearanceLevel.DRAFT_ONLY,
+        signals=["no recognised verb; defaulting to human review"],
+        description=tool.description,
+    )
+
+
+def classify_tools(
+    tools: Sequence[McpToolDescriptor],
+    policy: ClassificationPolicy | None = None,
+) -> list[ToolRisk]:
+    return [classify_tool(tool, policy) for tool in tools]
+
+
+def static_clearance(
+    tool_risks: Sequence[ToolRisk],
+    policy: ClassificationPolicy | None = None,
+) -> ClearanceLevel:
+    pol = policy or DEFAULT_POLICY
+    if not tool_risks:
+        return pol.empty_surface_clearance
+    return max_clearance(*(risk.clearance for risk in tool_risks))

@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-auditor"
+version = "1.0.2"
+description = "Fail-closed classification, allowlisting and per-call enforcement for MCP tool calls"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Combynr" }]
+keywords = ["mcp", "model-context-protocol", "security", "agents", "allowlist"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Security",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Combynr/mcp_auditor"
+Source = "https://github.com/Combynr/mcp_auditor"
+Issues = "https://github.com/Combynr/mcp_auditor/issues"
+Changelog = "https://github.com/Combynr/mcp_auditor/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+fetch = ["mcp>=1.8"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+
+[tool.setuptools.packages.find]
+include = ["mcp_auditor*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
