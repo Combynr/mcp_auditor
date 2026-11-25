@@ -31,6 +31,14 @@ inputs and the call breaks a rule it declares.
   round-trips unchanged. A report dict may carry an `argument_policy`.
 - A server entry that names a tenant refuses a caller that names a different
   tenant or none.
+- A built-in default pack (`DEFAULT_PACK`, `check_defaults`, `describe_defaults`)
+  for high-risk calls that have no schema under their own name, so an empty
+  `ArgumentPolicy()` protects with zero setup: path traversal, NUL, oversize
+  writes, header injection in recipients, non-http(s) URLs and URLs with
+  credentials are blocked; writes, shell, email and office write-back are held;
+  HTTP to a public host keeps its clearance and to a private host is held.
+  `ArgumentPolicy(defaults=False)` holds instead. A declared schema replaces the
+  defaults for its tool.
 
 ## 1.0.2 — 2026-11-23
 

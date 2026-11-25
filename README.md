@@ -159,6 +159,8 @@ assert check("send_email", {"to": ["a@elsewhere.test"]}).status == "blocked"
 assert check("notify", {"to": ["a@elsewhere.test"]}).status == "blocked"
 ```
 
+**Built-in defaults.** An `ArgumentPolicy()` with no schemas still protects: a high-risk call with no schema under its own name gets the default pack (`describe_defaults()` lists it in plain words). Paths must be strings without `..` or NUL, and resolve inside `workspace_root` when one is set; commands, recipients, URLs, office values and content have size and count caps; a recipient with a line break, a non-http(s) URL or a URL carrying credentials is blocked. File writes, shell, email and office write-back calls are held for approval; HTTP to a public host keeps the tool's clearance, and to a private, loopback or local host is held. Ordinary calls to filesystem, git, fetch, email and spreadsheet servers are not blocked (see `tests/test_defaults.py`). A schema declared for the tool's name replaces the defaults for that tool; `ArgumentPolicy(defaults=False)` holds every undeclared high-risk call instead.
+
 `AllowlistPolicy.evaluate()` takes the same `arguments`, `context` and `argument_policy` keywords, and an `AllowlistedServer` can store its rules (`argument_policy`, an `ArgumentPolicy.to_dict()`) and its `tenant_id`.
 
 ## Optional: overseer hook

@@ -26,6 +26,7 @@ from .classify import (
     tokens,
 )
 from .enforce import enforce_from_report, enforce_tool_call
+from .defaults import DEFAULT_PACK, check_defaults, describe_defaults
 from .families import HIGH_RISK_FAMILIES, detect_families
 from .fetch import audit_server, fetch_server_tools, serialize_tool_list
 from .overseer import (
@@ -58,6 +59,7 @@ __all__ = [
     "CallContext",
     "ClassificationPolicy",
     "ClearanceLevel",
+    "DEFAULT_PACK",
     "DEFAULT_POLICY",
     "HIGH_RISK_FAMILIES",
     "McpServerTarget",
@@ -74,7 +76,9 @@ __all__ = [
     "build_overseer_prompt",
     "classify_tool",
     "classify_tools",
+    "check_defaults",
     "coerce_clearance",
+    "describe_defaults",
     "detect_drift",
     "detect_families",
     "enforce_from_report",

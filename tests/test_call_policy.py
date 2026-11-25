@@ -357,8 +357,11 @@ def test_allowlist_entry_without_report_applies_the_new_checks():
     assert policy.evaluate(server_id="s", tool_name="anything").status == "auto_approved"
     assert policy.evaluate(server_id="s", tool_name="anything",
                            context=CallContext(agent_tools=[])).status == "blocked"
+    public = policy.evaluate(server_id="s", tool_name="get_page", argument_policy=ArgumentPolicy(),
+                             arguments={"url": "https://x.test"})
+    assert public.status == "auto_approved"  # the default pack lets public HTTP keep clearance
     held = policy.evaluate(server_id="s", tool_name="get_page", argument_policy=ArgumentPolicy(),
-                           arguments={"url": "https://x.test"})
+                           arguments={"url": "http://192.168.1.5/admin"})
     assert held.status == "requires_approval"
 
 

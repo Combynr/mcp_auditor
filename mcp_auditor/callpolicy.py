@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from .arguments import ToolArgumentSchema, validate_arguments
+from .defaults import check_defaults
 from .families import detect_families
 from .types import ClearanceLevel
 
@@ -66,6 +67,9 @@ class ArgumentPolicy:
 
     schemas: tuple[ToolArgumentSchema, ...] = ()
     workspace_root: str | None = None
+    #: Apply the built-in rules (:mod:`mcp_auditor.defaults`) to a high-risk call that
+    #: has no schema under its own name. With False such a call is simply held.
+    defaults: bool = True
 
     def by_name(self, tool_name: str) -> list[ToolArgumentSchema]:
         return [s for s in self.schemas if tool_name in s.names]
@@ -89,6 +93,8 @@ class ArgumentPolicy:
         out: dict[str, Any] = {"schemas": [s.to_dict() for s in self.schemas]}
         if self.workspace_root:
             out["workspace_root"] = self.workspace_root
+        if not self.defaults:
+            out["defaults"] = False
         return out
 
     @classmethod
@@ -98,7 +104,12 @@ class ArgumentPolicy:
         entries = raw.get("schemas") if isinstance(raw.get("schemas"), list) else []
         schemas = tuple(s for s in (ToolArgumentSchema.from_dict(e) for e in entries) if s)
         root = raw.get("workspace_root")
-        return cls(schemas=schemas, workspace_root=root if isinstance(root, str) and root else None)
+        return cls(
+            schemas=schemas,
+            workspace_root=root if isinstance(root, str) and root else None,
+            # Only an explicit false turns the defaults off.
+            defaults=raw.get("defaults") is not False,
+        )
 
 
 @dataclass
@@ -139,7 +150,14 @@ def check_arguments(
     arguments: Any,
     context: CallContext | None,
 ) -> PolicyOutcome:
-    """Apply the declared argument rules, or hold an undeclared high-risk call."""
+    """Apply the declared argument rules; otherwise the defaults for a high-risk call.
+
+    A schema declared under the tool's own name is the whole rule set for it. A
+    renamed tool that fits a declared schema of its family is checked against that
+    schema and held. Any other high-risk call gets the built-in default pack:
+    blocked when it breaks it, held when the pack says a person should look
+    (anything that writes, runs or sends), else decided by its clearance.
+    """
     outcome = PolicyOutcome()
     if policy is None:
         return outcome
@@ -161,11 +179,23 @@ def check_arguments(
             return outcome
         if schema.capability:
             outcome.capabilities.append(schema.capability)
-    if not declared and families:
+    if declared or not families:
+        return outcome
+    kinds = "/".join(sorted(families))
+    if matched or not policy.defaults or arguments is None:
         outcome.floor = ClearanceLevel.DRAFT_ONLY
         outcome.floor_reason = (
-            f"Tool '{tool_name}' looks like a {'/'.join(sorted(families))} tool and has no "
-            "declared argument schema under that name; held for approval.")
+            f"Tool '{tool_name}' looks like a {kinds} tool and has no declared argument "
+            "schema under that name; held for approval.")
+        return outcome
+    blocks, holds = check_defaults(families, arguments, workspace_root=root)
+    if blocks:
+        outcome.blocked_reason = (f"Tool '{tool_name}' arguments break the built-in "
+                                  f"{kinds} rules: " + "; ".join(blocks[:5]) + ".")
+    elif holds:
+        outcome.floor = ClearanceLevel.DRAFT_ONLY
+        outcome.floor_reason = (f"Tool '{tool_name}' is a {kinds} call: "
+                                + "; ".join(holds[:3]) + ". Held for approval.")
     return outcome
 
 
