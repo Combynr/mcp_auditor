@@ -14,8 +14,9 @@ All notable changes to this project are listed here. The project follows
   administrator marked trusted: its `readOnlyHint: true` lowers a state-changing or
   unrecognised tool to `READ_ONLY`. Destructive verbs, `destructiveHint: true` and
   non-ASCII names are never lowered, nor are names or descriptions with an outbound or
-  side-effect word (`send`, `publish`, `post`, `email`, `notify`, `share`, `delete`,
-  `create`, `update`, `write`, `run`, `merge`, `commit`). Untrusted, annotations only
+  side-effect word or an inflection of one (`HINT_NEVER_LOWERS`, 44 words: `send`,
+  `publish`, `post`, `email`, `message`, `push`, `deploy`, `upload`, `grant`, `sync`,
+  `export`, ... see the README). Untrusted, annotations only
   make a tool stricter (`destructiveHint: true` makes it destructive, also next to
   `readOnlyHint: true`).
 
@@ -24,10 +25,16 @@ All notable changes to this project are listed here. The project follows
 - Read-verb context: `schedule`, `message`, `email`, `post`, `run`, `commit` or
   `merge` as the second word of a name whose first word is `list`, `get`, `show`,
   `read`, `view`, `describe`, `fetch` or `search` (`get_schedule`) names what is read,
-  not an action. Only that word of the name is dropped: state verbs in the description
-  and later state words in the name still count, so `get_post` described as "post the
+  not an action. Only that position of the name is dropped: a later copy of the noun
+  (`get_post_and_post`), state verbs in the description and later state words in the
+  name still count, so `get_post` described as "post the
   draft publicly", `check_schedule`, `status_post` and `get_and_schedule` stay
   `DRAFT_ONLY`.
+- State words match simple inflections (`-s`, `-es`, `-ed`, `-ing`, with a final `e`
+  restored or a doubled consonant undone) in names and descriptions, so "then posts
+  it" is a write. In a description, an inflected form of one of the seven nouns right
+  after a read verb ("Search messages") is what is read. **Stricter than 1.1.0** for some
+  read tools, for example `get_setting` or a description "sorted by created date".
 - A `requires_approval` disposition for a `DRAFT_ONLY` effective clearance names the
   floor that held it: the server's clearance (with the audit's overseer verdict) or
   the tool's classification (with its signals). The reason no longer calls every such

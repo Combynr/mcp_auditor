@@ -58,9 +58,20 @@ READ_CONTEXT_VERBS = frozenset({"list", "get", "show", "read", "view", "describe
 
 # 1.1.1: words a trusted server's readOnlyHint never lowers. Outbound and side-effect
 # verbs are where a mistaken or lying hint costs most (exfiltration, publication).
-HINT_NEVER_LOWERS = frozenset({"send", "publish", "post", "email", "notify", "share",
-                               "delete", "create", "update", "write", "run", "merge",
-                               "commit"})
+HINT_NEVER_LOWERS = frozenset({
+    "send", "publish", "post", "email", "notify", "share", "delete", "create", "update",
+    "write", "run", "merge", "commit", "message", "push", "deploy", "upload", "grant",
+    "revoke", "invite", "approve", "trigger", "submit", "execute", "install", "uninstall",
+    "transfer", "pay", "assign", "move", "rename", "archive", "restore", "cancel", "book",
+    "schedule", "set", "add", "remove", "reply", "forward", "sync", "import", "export",
+})
+
+# 1.1.1: simple inflections. "posts", "posted", "committing" and "schedules" are the
+# state word "post", "commit" or "schedule" (state words and HINT_NEVER_LOWERS only;
+# destructive terms still match whole words). One suffix is stripped, then the stem is
+# tried as is, with a final "e" ("scheduled") and with a doubled consonant undone
+# ("committing", "stopped").
+_INFLECTIONS = ("ing", "ed", "es", "s")
 
 
 def _fold(text: str) -> str:
@@ -134,11 +145,13 @@ def classify_tool(
     pol = policy or DEFAULT_POLICY
     tok = tokens(tool.name, tool.description)
     destructive_hits = sorted(tok & pol.destructive_terms)
+    parts = _name_words(tool.name)
     nouns = _read_context_nouns(tool.name)
-    # A noun is dropped from the NAME's words only; every state verb in the description
-    # still counts.
-    state_hits = sorted(((tokens(tool.name) - nouns) | tokens(tool.description))
-                        & pol.state_changing_terms)
+    # The noun is dropped by POSITION (the name's second word) only: a later copy of it
+    # in the name, and every state word in the description, still count.
+    name_words = parts[:1] + parts[2:] if nouns else parts
+    state_hits = sorted(_inflected_hits(name_words, pol.state_changing_terms)
+                        | _description_state_hits(tool.description, pol.state_changing_terms))
     hints = tool.annotations if isinstance(getattr(tool, "annotations", None), dict) else {}
     if hints.get("destructiveHint") is True and not destructive_hits:
         # Stricter is always allowed: a server saying its tool is destructive is heeded,
@@ -160,7 +173,7 @@ def classify_tool(
     name = tool.name if isinstance(tool.name, str) else ""
     if (pol.trust_annotations and hints.get("readOnlyHint") is True
             and hints.get("destructiveHint") is not True and name.isascii()
-            and not tok & HINT_NEVER_LOWERS):
+            and not _inflected_hits(tok, HINT_NEVER_LOWERS)):
         return ToolRisk(
             name=tool.name,
             category="read_only",
@@ -208,17 +221,62 @@ def classify_tool(
     )
 
 
+def _name_words(name: object) -> list[str]:
+    """The tool name's folded words, in order."""
+    if not isinstance(name, str):
+        return []
+    return _TOKEN_PATTERN.findall(_fold(name))
+
+
+def _base_forms(word: str) -> set[str]:
+    forms = {word}
+    for suffix in _INFLECTIONS:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 2:
+            stem = word[: -len(suffix)]
+            forms.update((stem, stem + "e"))
+            if len(stem) >= 3 and stem[-1] == stem[-2]:
+                forms.add(stem[:-1])
+    return forms
+
+
+def _inflected_hits(words, terms: frozenset[str]) -> set[str]:
+    """The terms that the words are, or are a simple inflection of."""
+    return {base for word in words for base in _base_forms(word) if base in terms}
+
+
+def _description_state_hits(description: object, terms: frozenset[str]) -> set[str]:
+    """State words in a description. An exact word always counts. An inflected form
+    counts too ("then posts it"), except a plural-like form of an ambiguous noun right
+    after a read verb ("Search messages", "Lists posts"): there it names what is read.
+    That exception only ever narrows the inflection matching added in 1.1.1; 1.1.0
+    matched whole words only."""
+    if not isinstance(description, str):
+        return set()
+    words = _TOKEN_PATTERN.findall(_fold(description))
+    hits: set[str] = set()
+    for i, word in enumerate(words):
+        if word in terms:
+            hits.add(word)
+            continue
+        found = _inflected_hits((word,), terms)
+        if i and found <= AMBIGUOUS_STATE_NOUNS \
+                and _inflected_hits((words[i - 1],), READ_CONTEXT_VERBS):
+            continue
+        hits |= found
+    return hits
+
+
 def _read_context_nouns(name: object) -> set[str]:
-    """The one ambiguous noun a read-verb name reads ("schedule" in "get_schedule"),
-    or an empty set. The name's first word must be a READ_CONTEXT_VERBS verb and the
-    noun its second word; any later state word in the name still counts."""
+    """The ambiguous noun a read-verb name reads ("schedule" in "get_schedule",
+    "message" in "list_messages"), or an empty set. The name's first word must be a
+    READ_CONTEXT_VERBS verb and its second word the noun (or an inflection of it). Only
+    that position is dropped; a later copy of the noun in the name still counts."""
     if not isinstance(name, str) or not name.isascii():
         return set()
-    parts = _TOKEN_PATTERN.findall(_fold(name))
-    if len(parts) < 2 or parts[0] not in READ_CONTEXT_VERBS \
-            or parts[1] not in AMBIGUOUS_STATE_NOUNS:
+    parts = _name_words(name)
+    if len(parts) < 2 or parts[0] not in READ_CONTEXT_VERBS:
         return set()
-    return {parts[1]}
+    return _inflected_hits(parts[1:2], AMBIGUOUS_STATE_NOUNS)
 
 
 def classify_tools(

@@ -1,8 +1,9 @@
 """1.1.1: tool annotations, the trust policy, read-context nouns and floor reasons.
 
-61 test cases: 36 fail on 1.1.0 (36a2fd2); the 25 that pass there are the names and
-descriptions that must stay DRAFT_ONLY and are not READ_ONLY. Review r1 (amendment 1)
-added 42 cases; 34 cases fail on the first 1.1.1 commit (fb5e92f). The tests named
+99 test cases: 61 fail on 1.1.0 (36a2fd2); the 38 that pass there are cases that must
+stay held or not READ_ONLY, plus read guards. Review r1 (amendment 1) added 42 cases (34
+of the 61 at that point fail on fb5e92f); review r2 (amendment 2) added 38 more, of
+which 33 fail on f2ee8c1 and 5 are read guards that pass everywhere. The tests named
 "guard" check properties the change must keep but use the new field, so they cannot
 run on 1.1.0.
 """
@@ -58,7 +59,9 @@ def test_a_change_to_annotations_is_surface_drift():
 # (b) annotations narrow risk only for a trusted server -----------------------------------
 
 def test_a_trusted_servers_read_only_hint_lowers_an_unknown_verb_to_read_only():
-    risk = classify_tool(_tool("sync_calendar", **READ_HINT), _trusted())
+    # Amendment 2: "sync" joined HINT_NEVER_LOWERS, so the unknown verb here is
+    # "refresh" (sync_calendar is now held; see the amendment 2 tests).
+    risk = classify_tool(_tool("refresh_calendar", **READ_HINT), _trusted())
     assert risk.clearance is ClearanceLevel.READ_ONLY
     assert "trusted" in risk.signals[0]
 
@@ -217,3 +220,70 @@ def test_destructive_and_read_only_hints_together_are_destructive(trusted):
 def test_a_trusted_read_only_hint_never_lowers_an_outbound_verb(name, description):
     risk = classify_tool(_tool(name, description, **READ_HINT), _trusted())
     assert risk.clearance is not ClearanceLevel.READ_ONLY, name
+
+
+# amendment 2 (review r2) -------------------------------------------------------------------
+
+# Finding 1: the noun is dropped by position only; a later copy of it in the name counts.
+REPEATED_NOUNS = ["get_post_and_post", "get_commit_to_commit", "list_message_then_message",
+                  "get_email_or_email", "get_run_run", "fetch_merge_merge"]
+
+
+@pytest.mark.parametrize("name", REPEATED_NOUNS)
+def test_a_repeated_noun_in_the_name_is_held(name):
+    risk = classify_tool(McpToolDescriptor(name=name))
+    assert risk.clearance is ClearanceLevel.DRAFT_ONLY, name
+    assert risk.category == "state_changing"
+
+
+def test_a_repeated_noun_is_not_auto_approved_on_a_read_only_server():
+    report = audit_tool_surface_sync([McpToolDescriptor(name="get_post_and_post")],
+                                     use_overseer=False).to_dict()
+    report["recommended_clearance"] = "READ_ONLY"
+    out = enforce_from_report(report, tool_name="get_post_and_post", execution_mode="AUTO")
+    assert out.status == "requires_approval"
+
+
+# Finding 2: more outbound and side-effect words a trusted hint never lowers.
+@pytest.mark.parametrize("name", ["message_user", "push_changes", "deploy_app", "upload_file",
+                                  "grant_access", "invite_user", "approve_pr", "trigger_build",
+                                  "sync_calendar", "forward_mail", "reply_thread",
+                                  "export_report"])
+def test_a_trusted_read_only_hint_never_lowers_a_side_effect_word(name):
+    risk = classify_tool(_tool(name, **READ_HINT), _trusted())
+    assert risk.clearance is not ClearanceLevel.READ_ONLY, name
+
+
+# Finding 3: simple inflections of state words count.
+@pytest.mark.parametrize("name,description", [
+    ("get_post", "Fetches; then posts it"),
+    ("get_report", "Report is posted to the channel"),
+    ("list_jobs", "Lists jobs, committing any pending ones"),
+    ("show_calendar", "Shows the calendar and schedules a meeting"),
+    ("get_status", "Gets status and updates the record"),
+    ("view_queue", "Runs the next job"),
+    ("read_inbox", "Reads mail and emails a summary"),
+    ("get_draft", "Gets the draft and publishes it"),
+])
+def test_an_inflected_state_word_in_the_description_is_held(name, description):
+    risk = classify_tool(McpToolDescriptor(name=name, description=description))
+    assert risk.clearance is ClearanceLevel.DRAFT_ONLY, (name, description)
+
+
+@pytest.mark.parametrize("name", ["get_item_updates", "list_jobs_and_commits",
+                                  "show_report_posting", "read_file_writes",
+                                  "get_user_creates", "view_job_stopped"])
+def test_an_inflected_state_word_in_the_name_is_held(name):
+    assert classify_tool(McpToolDescriptor(name=name)).clearance is ClearanceLevel.DRAFT_ONLY
+
+
+@pytest.mark.parametrize("name,description", [
+    ("list_messages", "List messages in a folder"),
+    ("search_emails", "Search messages"),
+    ("get_posts", "Lists posts by author"),
+    ("list_runs", "Lists runs of a workflow"),
+    ("get_settings", "Read settings"),
+])
+def test_an_inflected_noun_read_by_a_read_verb_stays_read_only(name, description):
+    risk = classify_tool(McpToolDescriptor(name=name, description=description))
+    assert risk.clearance is ClearanceLevel.READ_ONLY, (name, description)
