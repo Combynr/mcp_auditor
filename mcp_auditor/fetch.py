@@ -14,7 +14,7 @@ from typing import Any
 from .audit import audit_tool_surface
 from .classify import ClassificationPolicy
 from .overseer import OverseerFn
-from .types import McpServerTarget, McpToolDescriptor, ServerAuditReport
+from .types import normalize_annotations, McpServerTarget, McpToolDescriptor, ServerAuditReport
 
 # A server that keeps handing out cursors must not keep the audit running forever.
 MAX_TOOL_PAGES = 100
@@ -147,10 +147,12 @@ def serialize_tool_list(response: Any) -> list[McpToolDescriptor]:
         name = getattr(tool, "name", None)
         description = getattr(tool, "description", None)
         schema = getattr(tool, "inputSchema", None) or getattr(tool, "input_schema", None)
+        annotations = getattr(tool, "annotations", None)
         if name is None and isinstance(tool, dict):
             name = tool.get("name")
             description = tool.get("description")
             schema = tool.get("inputSchema") or tool.get("input_schema")
+            annotations = tool.get("annotations")
         if not name:
             continue
         descriptors.append(
@@ -158,6 +160,7 @@ def serialize_tool_list(response: Any) -> list[McpToolDescriptor]:
                 name=str(name),
                 description=str(description or ""),
                 input_schema=schema if isinstance(schema, dict) else {},
+                annotations=normalize_annotations(annotations),
             )
         )
     return descriptors

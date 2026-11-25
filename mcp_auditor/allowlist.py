@@ -252,6 +252,8 @@ class AllowlistPolicy:
             arguments=arguments,
             context=context,
             argument_policy=policy,
+            server_floor="set for the server; it has no audit report",
+            tool_floor="no audit report, so the server's clearance applies",
         )
 
 

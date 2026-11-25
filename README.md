@@ -83,6 +83,18 @@ A longer example is in [`examples/basic_audit.py`](examples/basic_audit.py).
 
 Destructive verbs win over read-only ones, so `list_and_delete` is destructive. Hosts can add terms with `ClassificationPolicy().with_extra(...)`.
 
+From 1.1.1, a few state verbs that are also nouns (`schedule`, `message`, `email`, `post`, `run`, `commit`, `merge`) count as the thing read when the name starts with a read verb and joins no other action: `get_schedule` is `READ_ONLY`, while `schedule_meeting` and `get_and_schedule` stay `DRAFT_ONLY`.
+
+### Tool annotations (1.1.1)
+
+`McpToolDescriptor.annotations` keeps the MCP hints a server advertises (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; booleans only). They are the server's own claims, so they can make a tool stricter but never more open, unless an administrator trusts the server:
+
+- `destructiveHint: true` (without `readOnlyHint: true`) always makes the tool destructive.
+- `readOnlyHint: true` lowers a state-changing or unrecognised tool to `READ_ONLY` only with `ClassificationPolicy(trust_annotations=True)`, which a host should pass only when auditing a server an administrator marked trusted. Destructive verbs, `destructiveHint: true` and non-ASCII names are never lowered.
+- Annotations are part of the surface fingerprint when a tool has any, so changing them is drift. A server that advertises annotations audited under 1.1.0 fingerprints differently under 1.1.1 and must be re-audited once.
+
+A server's clearance still applies on top: a tool classified `READ_ONLY` on a server whose overseer verdict was `SKIPPED` is held for approval. From 1.1.1, the `requires_approval` reason says which floor held the call (the server's clearance, with its overseer verdict, or the tool's classification, with its signals).
+
 ### Clearance levels
 
 | Level | When | Effect on a call |
@@ -230,7 +242,7 @@ Enumeration follows `tools/list` pagination. `timeout_seconds` bounds the whole 
 - **camelCase names are one token.** `getIssue` matches no verb and gets `DRAFT_ONLY`. This is stricter than intended, not more open.
 - **The overseer reads text the server controls.** Tool descriptions can carry prompt injection. A `SAFE` verdict can never lower the clearance below the static result, but on a surface that already looks read-only it is what allows auto-approval. The library puts no time limit on the overseer call, so bound it in your callable.
 - **This is not a sandbox.** It decides whether a call may proceed. Argument rules (1.1) check only the arguments a host declares; results are not inspected, and it cannot see what a server does behind a tool name. A server can behave differently from what it advertises. Your host must call `evaluate()` on every execution path.
-- **The fingerprint covers names, descriptions and input-schema property names only.** It does not cover property types or descriptions, output schemas or annotations.
+- **The fingerprint covers names, descriptions, input-schema property names and (1.1.1) annotation hints only.** It does not cover property types or descriptions or output schemas.
 - **No persistence, approval inbox or audit log.** These belong to the host.
 - `McpServerTarget.to_dict()` includes `headers` and `env` verbatim. Do not log or persist it if they hold credentials.
 

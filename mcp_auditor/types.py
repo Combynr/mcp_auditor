@@ -49,13 +49,23 @@ class McpToolDescriptor:
     name: str
     description: str = ""
     input_schema: dict[str, Any] = field(default_factory=dict)
+    # 1.1.1: the MCP tool annotations the server advertised (readOnlyHint,
+    # destructiveHint, idempotentHint, openWorldHint), booleans only. They are the
+    # server's own claims: see ClassificationPolicy.trust_annotations.
+    annotations: dict[str, bool] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.annotations = normalize_annotations(self.annotations)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "input_schema": dict(self.input_schema or {}),
         }
+        if self.annotations:          # only when set, so a 1.1.0 descriptor is unchanged
+            out["annotations"] = dict(self.annotations)
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> McpToolDescriptor:
@@ -63,7 +73,25 @@ class McpToolDescriptor:
             name=str(data.get("name") or ""),
             description=str(data.get("description") or ""),
             input_schema=dict(data.get("input_schema") or data.get("inputSchema") or {}),
+            annotations=normalize_annotations(data.get("annotations")),
         )
+
+
+#: The MCP tool annotation hints the auditor reads (all booleans in the MCP schema).
+ANNOTATION_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+
+
+def normalize_annotations(raw: Any) -> dict[str, bool]:
+    """The known boolean hints of an annotations mapping or object; anything else is
+    dropped (a string "true" is not a hint)."""
+    if raw is None:
+        return {}
+    out: dict[str, bool] = {}
+    for key in ANNOTATION_HINTS:
+        value = raw.get(key) if isinstance(raw, dict) else getattr(raw, key, None)
+        if isinstance(value, bool):
+            out[key] = value
+    return out
 
 
 @dataclass(slots=True)

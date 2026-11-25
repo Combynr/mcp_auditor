@@ -44,6 +44,14 @@ DEFAULT_READ_ONLY_TERMS = frozenset(
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
+# 1.1.1: state terms that are also nouns. After a leading read verb in the tool's
+# name ("get_schedule", "list_message_threads") such a term names the thing read,
+# not an action. Only these, only after a read verb that starts the name, and never
+# in a name that joins actions ("get_and_schedule").
+AMBIGUOUS_STATE_NOUNS = frozenset({"schedule", "message", "email", "post", "run",
+                                   "commit", "merge"})
+_JOINERS = frozenset({"and", "then", "or", "to", "plus"})
+
 
 def _fold(text: str) -> str:
     # NFKC folds compatibility forms (fullwidth "ＤＥＬＥＴＥ") onto ASCII before
@@ -76,6 +84,12 @@ class ClassificationPolicy:
     empty_surface_clearance: ClearanceLevel = ClearanceLevel.DRAFT_ONLY
     # If True, destructive tools raise server floor to BLOCKED (strict mode).
     block_destructive: bool = False
+    # 1.1.1: set ONLY for a server an administrator marked trusted. Then its
+    # ``readOnlyHint: true`` (without ``destructiveHint: true``) may lower a tool the
+    # name heuristic calls state-changing to READ_ONLY. Destructive verbs and non-ASCII
+    # names are never lowered. Untrusted (the default), a server's annotations can only
+    # make a tool stricter (``destructiveHint: true``), never more permissive.
+    trust_annotations: bool = False
 
     def __post_init__(self) -> None:
         self.destructive_terms = _terms(self.destructive_terms)
@@ -95,6 +109,7 @@ class ClassificationPolicy:
             read_only_terms=self.read_only_terms | _terms(read_only),
             empty_surface_clearance=self.empty_surface_clearance,
             block_destructive=self.block_destructive,
+            trust_annotations=self.trust_annotations,
         )
 
 
@@ -109,6 +124,14 @@ def classify_tool(
     tok = tokens(tool.name, tool.description)
     destructive_hits = sorted(tok & pol.destructive_terms)
     state_hits = sorted(tok & pol.state_changing_terms)
+    nouns = _read_context_nouns(tool.name, pol)
+    if nouns:
+        state_hits = [hit for hit in state_hits if hit not in nouns]
+    hints = tool.annotations if isinstance(getattr(tool, "annotations", None), dict) else {}
+    if hints.get("destructiveHint") is True and hints.get("readOnlyHint") is not True \
+            and not destructive_hits:
+        # Stricter is always allowed: a server saying its tool is destructive is heeded.
+        destructive_hits = ["destructiveHint annotation"]
 
     if destructive_hits:
         clearance = (
@@ -118,7 +141,19 @@ def classify_tool(
             name=tool.name,
             category="destructive",
             clearance=clearance,
-            signals=[f"destructive verb: {hit}" for hit in destructive_hits],
+            signals=[hit if " " in hit else f"destructive verb: {hit}"
+                     for hit in destructive_hits],
+            description=tool.description,
+        )
+    name = tool.name if isinstance(tool.name, str) else ""
+    if (pol.trust_annotations and hints.get("readOnlyHint") is True
+            and hints.get("destructiveHint") is not True and name.isascii()):
+        return ToolRisk(
+            name=tool.name,
+            category="read_only",
+            clearance=ClearanceLevel.READ_ONLY,
+            signals=["readOnlyHint from a server an administrator marked trusted"]
+            + [f"state-changing verb overridden by it: {hit}" for hit in state_hits],
             description=tool.description,
         )
     if state_hits:
@@ -129,7 +164,6 @@ def classify_tool(
             signals=[f"state-changing verb: {hit}" for hit in state_hits],
             description=tool.description,
         )
-    name = tool.name if isinstance(tool.name, str) else ""
     if not name.isascii():
         # Non-ASCII letters in a name can hide a verb from the token matcher
         # (Cyrillic "е" in "dеlete"), so such a name never earns READ_ONLY.
@@ -146,7 +180,8 @@ def classify_tool(
             name=tool.name,
             category="read_only",
             clearance=ClearanceLevel.READ_ONLY,
-            signals=[f"read-only verb: {hit}" for hit in read_hits],
+            signals=[f"read-only verb: {hit}" for hit in read_hits]
+            + [f"read context: '{n}' names what is read" for n in sorted(nouns)],
             description=tool.description,
         )
     # Unknown verbs are NOT treated as read-only — that was a false-negative
@@ -158,6 +193,18 @@ def classify_tool(
         signals=["no recognised verb; defaulting to human review"],
         description=tool.description,
     )
+
+
+def _read_context_nouns(name: object, pol: ClassificationPolicy) -> set[str]:
+    """The ambiguous state nouns a read-verb name reads ("schedule" in
+    "get_schedule"), or an empty set. The name must start with a read verb and not
+    join actions; the noun must appear in the name itself."""
+    if not isinstance(name, str) or not name.isascii():
+        return set()
+    parts = _TOKEN_PATTERN.findall(_fold(name))
+    if len(parts) < 2 or parts[0] not in pol.read_only_terms or _JOINERS & set(parts):
+        return set()
+    return {p for p in parts[1:] if p in AMBIGUOUS_STATE_NOUNS}
 
 
 def classify_tools(
