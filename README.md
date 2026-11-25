@@ -83,14 +83,14 @@ A longer example is in [`examples/basic_audit.py`](examples/basic_audit.py).
 
 Destructive verbs win over read-only ones, so `list_and_delete` is destructive. Hosts can add terms with `ClassificationPolicy().with_extra(...)`.
 
-From 1.1.1, a few state verbs that are also nouns (`schedule`, `message`, `email`, `post`, `run`, `commit`, `merge`) count as the thing read when the name starts with a read verb and joins no other action: `get_schedule` is `READ_ONLY`, while `schedule_meeting` and `get_and_schedule` stay `DRAFT_ONLY`.
+From 1.1.1, a few state verbs that are also nouns (`schedule`, `message`, `email`, `post`, `run`, `commit`, `merge`) count as the thing read in one shape only: the name's first word is `list`, `get`, `show`, `read`, `view`, `describe`, `fetch` or `search`, and the noun is its second word. Only that word of the name is dropped; every state verb in the description, and any later state word in the name, still counts. So `get_schedule` and `list_message_threads` are `READ_ONLY`, while `schedule_meeting`, `get_and_schedule`, `check_schedule`, `status_post`, `list_run_via_message`, and `get_post` described as "post the draft publicly" stay `DRAFT_ONLY`. A description that mentions the noun ("Get the team's schedule") also keeps the tool `DRAFT_ONLY`: a server writes both name and description, so the rule never trusts the description.
 
 ### Tool annotations (1.1.1)
 
 `McpToolDescriptor.annotations` keeps the MCP hints a server advertises (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; booleans only). They are the server's own claims, so they can make a tool stricter but never more open, unless an administrator trusts the server:
 
-- `destructiveHint: true` (without `readOnlyHint: true`) always makes the tool destructive.
-- `readOnlyHint: true` lowers a state-changing or unrecognised tool to `READ_ONLY` only with `ClassificationPolicy(trust_annotations=True)`, which a host should pass only when auditing a server an administrator marked trusted. Destructive verbs, `destructiveHint: true` and non-ASCII names are never lowered.
+- `destructiveHint: true` always makes the tool destructive, also next to `readOnlyHint: true` (contradictory hints get the stricter reading).
+- `readOnlyHint: true` lowers a state-changing or unrecognised tool to `READ_ONLY` only with `ClassificationPolicy(trust_annotations=True)`, which a host should pass only when auditing a server an administrator marked trusted. Destructive verbs, `destructiveHint: true` and non-ASCII names are never lowered, and neither is a tool whose name or description has an outbound or side-effect word (`send`, `publish`, `post`, `email`, `notify`, `share`, `delete`, `create`, `update`, `write`, `run`, `merge`, `commit`).
 - Annotations are part of the surface fingerprint when a tool has any, so changing them is drift. A server that advertises annotations audited under 1.1.0 fingerprints differently under 1.1.1 and must be re-audited once.
 
 A server's clearance still applies on top: a tool classified `READ_ONLY` on a server whose overseer verdict was `SKIPPED` is held for approval. From 1.1.1, the `requires_approval` reason says which floor held the call (the server's clearance, with its overseer verdict, or the tool's classification, with its signals).

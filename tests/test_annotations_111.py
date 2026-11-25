@@ -1,8 +1,10 @@
 """1.1.1: tool annotations, the trust policy, read-context nouns and floor reasons.
 
-19 tests; 14 fail on 1.1.0 (36a2fd2). The 5 that pass there are the names that must
-stay DRAFT_ONLY. The two tests named "guard" check properties the change must keep, but
-use the new field, so they cannot run on 1.1.0.
+61 test cases: 36 fail on 1.1.0 (36a2fd2); the 25 that pass there are the names and
+descriptions that must stay DRAFT_ONLY and are not READ_ONLY. Review r1 (amendment 1)
+added 42 cases; 34 cases fail on the first 1.1.1 commit (fb5e92f). The tests named
+"guard" check properties the change must keep but use the new field, so they cannot
+run on 1.1.0.
 """
 from __future__ import annotations
 
@@ -87,7 +89,9 @@ def test_trust_survives_with_extra():
 # (c) 'schedule' after a read verb is a noun ------------------------------------------------
 
 @pytest.mark.parametrize("name,description,expected", [
-    ("get_schedule", "Get the team's schedule", ClearanceLevel.READ_ONLY),
+    ("get_schedule", "", ClearanceLevel.READ_ONLY),
+    # amendment 1: the description's own "schedule" is not dropped, so this is held.
+    ("get_schedule", "Get the team's schedule", ClearanceLevel.DRAFT_ONLY),
     ("list_schedule_entries", "", ClearanceLevel.READ_ONLY),
     ("read_schedule", "", ClearanceLevel.READ_ONLY),
     ("schedule_meeting", "Schedule a meeting", ClearanceLevel.DRAFT_ONLY),
@@ -128,3 +132,88 @@ def test_a_server_without_an_audit_names_its_set_clearance():
     pol.upsert(AllowlistedServer(server_id="cal"))
     out = pol.evaluate(server_id="cal", tool_name="get_schedule", execution_mode="AUTO")
     assert out.status == "requires_approval" and "no audit report" in out.reason
+
+
+# amendment 1 (review r1) -------------------------------------------------------------------
+
+# Finding 1: a noun is dropped from the name only; the description's state verbs count.
+DESCRIBED_WRITES = [
+    ("get_post", "Will post the draft publicly to the channel"),
+    ("get_run", "run the job now"),
+    ("get_email", "email the report to the customer"),
+    ("fetch_message", "message all users"),
+    ("get_merge", "merge the pull request into main"),
+    ("check_schedule", "schedule a new meeting"),
+]
+
+
+@pytest.mark.parametrize("name,description", DESCRIBED_WRITES)
+def test_a_write_in_the_description_is_held_even_after_a_read_verb(name, description):
+    # Default policy only, so this also runs (and holds) on 1.1.0.
+    risk = classify_tool(McpToolDescriptor(name=name, description=description))
+    assert risk.clearance is ClearanceLevel.DRAFT_ONLY, name
+    assert risk.category == "state_changing"
+
+
+@pytest.mark.parametrize("name,description", DESCRIBED_WRITES)
+def test_a_described_write_is_held_under_a_trusting_policy_without_hints(name, description):
+    risk = classify_tool(McpToolDescriptor(name=name, description=description), _trusted())
+    assert risk.clearance is ClearanceLevel.DRAFT_ONLY, name
+
+
+def _get_post_on_a_read_only_server():
+    report = audit_tool_surface_sync(
+        [McpToolDescriptor(name="get_post",
+                           description="Will post the draft publicly to the channel")],
+        use_overseer=False).to_dict()
+    report["recommended_clearance"] = "READ_ONLY"
+    return enforce_from_report(report, tool_name="get_post", execution_mode="AUTO")
+
+
+def test_a_described_write_is_not_auto_approved_on_a_read_only_server():
+    assert _get_post_on_a_read_only_server().status == "requires_approval"
+
+
+def test_the_hold_on_a_described_write_names_the_tool_floor():
+    reason = _get_post_on_a_read_only_server().reason
+    assert "the tool is classified DRAFT_ONLY (state-changing verb: post)" in reason
+
+
+# Finding 2: the read verb is the name's first word and the noun is its second word.
+@pytest.mark.parametrize("name", ["get_schedule", "list_message_threads", "show_email",
+                                  "read_post", "view_run", "describe_commit",
+                                  "fetch_merge"])
+def test_each_ambiguous_noun_reads_as_a_noun_right_after_a_read_verb(name):
+    risk = classify_tool(McpToolDescriptor(name=name))
+    assert risk.clearance is ClearanceLevel.READ_ONLY, name
+    assert any(s.startswith("read context:") for s in risk.signals)
+
+
+@pytest.mark.parametrize("name", [
+    "status_post", "explain_commit", "list_run_via_message", "health_run",
+    "summarize_email", "check_schedule", "count_run", "get_email_message_post",
+    "list_all_runs_then_merge", "get_latest_post", "query_run", "preview_merge",
+])
+def test_the_read_context_is_only_a_listed_read_verb_then_the_noun(name):
+    assert classify_tool(McpToolDescriptor(name=name)).clearance \
+        is not ClearanceLevel.READ_ONLY, name
+
+
+# Finding 4: contradictory hints get the stricter one.
+@pytest.mark.parametrize("trusted", [False, True])
+def test_destructive_and_read_only_hints_together_are_destructive(trusted):
+    policy = _trusted() if trusted else None
+    for name in ("sync_calendar", "noop", "get_schedule", "list_files"):
+        risk = classify_tool(_tool(name, readOnlyHint=True, destructiveHint=True), policy)
+        assert risk.category == "destructive", name
+        assert risk.clearance is ClearanceLevel.DRAFT_ONLY
+
+
+# Finding 5: a trusted readOnlyHint never lowers outbound or side-effect verbs.
+@pytest.mark.parametrize("name,description", [
+    ("send_email", ""), ("publish_post", ""), ("notify_team", ""), ("share_doc", ""),
+    ("sync_calendar", "create an event"), ("trigger_run", ""),
+])
+def test_a_trusted_read_only_hint_never_lowers_an_outbound_verb(name, description):
+    risk = classify_tool(_tool(name, description, **READ_HINT), _trusted())
+    assert risk.clearance is not ClearanceLevel.READ_ONLY, name

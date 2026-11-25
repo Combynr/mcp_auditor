@@ -44,13 +44,23 @@ DEFAULT_READ_ONLY_TERMS = frozenset(
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
-# 1.1.1: state terms that are also nouns. After a leading read verb in the tool's
-# name ("get_schedule", "list_message_threads") such a term names the thing read,
-# not an action. Only these, only after a read verb that starts the name, and never
-# in a name that joins actions ("get_and_schedule").
+# 1.1.1: state terms that are also nouns. Directly after a read verb that is the
+# FIRST word of the tool's name ("get_schedule", "list_message_threads") such a term
+# names the thing read, not an action. Only the name's own word is dropped; the
+# description's state verbs always count (a server writes both, so "get_post" described
+# as "post the draft publicly" stays a write).
 AMBIGUOUS_STATE_NOUNS = frozenset({"schedule", "message", "email", "post", "run",
                                    "commit", "merge"})
-_JOINERS = frozenset({"and", "then", "or", "to", "plus"})
+# Narrower than DEFAULT_READ_ONLY_TERMS on purpose: "status_post", "explain_commit"
+# and "check_schedule" are not reads of a post, commit or schedule.
+READ_CONTEXT_VERBS = frozenset({"list", "get", "show", "read", "view", "describe",
+                                "fetch", "search"})
+
+# 1.1.1: words a trusted server's readOnlyHint never lowers. Outbound and side-effect
+# verbs are where a mistaken or lying hint costs most (exfiltration, publication).
+HINT_NEVER_LOWERS = frozenset({"send", "publish", "post", "email", "notify", "share",
+                               "delete", "create", "update", "write", "run", "merge",
+                               "commit"})
 
 
 def _fold(text: str) -> str:
@@ -86,9 +96,10 @@ class ClassificationPolicy:
     block_destructive: bool = False
     # 1.1.1: set ONLY for a server an administrator marked trusted. Then its
     # ``readOnlyHint: true`` (without ``destructiveHint: true``) may lower a tool the
-    # name heuristic calls state-changing to READ_ONLY. Destructive verbs and non-ASCII
-    # names are never lowered. Untrusted (the default), a server's annotations can only
-    # make a tool stricter (``destructiveHint: true``), never more permissive.
+    # name heuristic calls state-changing to READ_ONLY. Destructive verbs, non-ASCII
+    # names and HINT_NEVER_LOWERS words are never lowered. Untrusted (the default), a
+    # server's annotations can only make a tool stricter (``destructiveHint: true``),
+    # never more permissive.
     trust_annotations: bool = False
 
     def __post_init__(self) -> None:
@@ -123,14 +134,15 @@ def classify_tool(
     pol = policy or DEFAULT_POLICY
     tok = tokens(tool.name, tool.description)
     destructive_hits = sorted(tok & pol.destructive_terms)
-    state_hits = sorted(tok & pol.state_changing_terms)
-    nouns = _read_context_nouns(tool.name, pol)
-    if nouns:
-        state_hits = [hit for hit in state_hits if hit not in nouns]
+    nouns = _read_context_nouns(tool.name)
+    # A noun is dropped from the NAME's words only; every state verb in the description
+    # still counts.
+    state_hits = sorted(((tokens(tool.name) - nouns) | tokens(tool.description))
+                        & pol.state_changing_terms)
     hints = tool.annotations if isinstance(getattr(tool, "annotations", None), dict) else {}
-    if hints.get("destructiveHint") is True and hints.get("readOnlyHint") is not True \
-            and not destructive_hits:
-        # Stricter is always allowed: a server saying its tool is destructive is heeded.
+    if hints.get("destructiveHint") is True and not destructive_hits:
+        # Stricter is always allowed: a server saying its tool is destructive is heeded,
+        # also when it says read-only too (contradictory hints get the stricter one).
         destructive_hits = ["destructiveHint annotation"]
 
     if destructive_hits:
@@ -147,7 +159,8 @@ def classify_tool(
         )
     name = tool.name if isinstance(tool.name, str) else ""
     if (pol.trust_annotations and hints.get("readOnlyHint") is True
-            and hints.get("destructiveHint") is not True and name.isascii()):
+            and hints.get("destructiveHint") is not True and name.isascii()
+            and not tok & HINT_NEVER_LOWERS):
         return ToolRisk(
             name=tool.name,
             category="read_only",
@@ -195,16 +208,17 @@ def classify_tool(
     )
 
 
-def _read_context_nouns(name: object, pol: ClassificationPolicy) -> set[str]:
-    """The ambiguous state nouns a read-verb name reads ("schedule" in
-    "get_schedule"), or an empty set. The name must start with a read verb and not
-    join actions; the noun must appear in the name itself."""
+def _read_context_nouns(name: object) -> set[str]:
+    """The one ambiguous noun a read-verb name reads ("schedule" in "get_schedule"),
+    or an empty set. The name's first word must be a READ_CONTEXT_VERBS verb and the
+    noun its second word; any later state word in the name still counts."""
     if not isinstance(name, str) or not name.isascii():
         return set()
     parts = _TOKEN_PATTERN.findall(_fold(name))
-    if len(parts) < 2 or parts[0] not in pol.read_only_terms or _JOINERS & set(parts):
+    if len(parts) < 2 or parts[0] not in READ_CONTEXT_VERBS \
+            or parts[1] not in AMBIGUOUS_STATE_NOUNS:
         return set()
-    return {p for p in parts[1:] if p in AMBIGUOUS_STATE_NOUNS}
+    return {parts[1]}
 
 
 def classify_tools(
