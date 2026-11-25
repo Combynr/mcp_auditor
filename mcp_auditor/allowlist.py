@@ -8,7 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .enforce import _drift_block, _grant_denies, enforce_from_report, enforce_tool_call
+from .callpolicy import ArgumentPolicy, CallContext, check_identity
+from .enforce import _decide_with_policy, _drift_block, _grant_denies, enforce_from_report
 from .types import ClearanceLevel, ToolCallDisposition, coerce_clearance
 
 
@@ -27,6 +28,10 @@ class AllowlistedServer:
     transport: str = ""
     endpoint: str = ""
     note: str = ""
+    # 1.1: the tenant the server belongs to ("" = none), and its declared argument
+    # rules (an ``ArgumentPolicy.to_dict()``; None = no argument checks).
+    tenant_id: str = ""
+    argument_policy: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         # A plain string here would otherwise crash evaluate() or be misread.
@@ -34,7 +39,7 @@ class AllowlistedServer:
         self.recommended_clearance = coerce_clearance(self.recommended_clearance)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "server_id": self.server_id,
             "display_name": self.display_name,
             "status": self.status,
@@ -48,6 +53,12 @@ class AllowlistedServer:
             "endpoint": self.endpoint,
             "note": self.note,
         }
+        # Only when set, so a 1.0 policy serialises exactly as before.
+        if self.tenant_id:
+            out["tenant_id"] = self.tenant_id
+        if self.argument_policy is not None:
+            out["argument_policy"] = dict(self.argument_policy)
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AllowlistedServer:
@@ -72,6 +83,13 @@ class AllowlistedServer:
             transport=str(data.get("transport") or ""),
             endpoint=str(data.get("endpoint") or ""),
             note=str(data.get("note") or ""),
+            tenant_id=str(data.get("tenant_id") or ""),
+            # A present but malformed policy still counts as a policy (fail closed).
+            argument_policy=(
+                None if data.get("argument_policy") is None
+                else dict(data["argument_policy"]) if isinstance(data["argument_policy"], dict)
+                else {}
+            ),
         )
 
 
@@ -126,11 +144,18 @@ class AllowlistPolicy:
         tool_name: str,
         execution_mode: str = "AUTO",
         live_fingerprint: str | None = None,
+        arguments: Any = None,
+        context: CallContext | None = None,
+        argument_policy: ArgumentPolicy | None = None,
     ) -> ToolCallDisposition:
         """Decide one call. Anything not explicitly allowed is refused or sent to a human.
 
         Pass ``live_fingerprint`` (``surface_fingerprint`` of the server's current
         tools) to block calls when the surface no longer matches the audit.
+
+        1.1: ``context`` (caller capabilities, tenant, agent tool list) and
+        ``arguments`` are checked when given; ``argument_policy`` overrides the
+        server's stored ``argument_policy``. See ``enforce_from_report``.
         """
         if self.enabled is not True:
             return ToolCallDisposition(
@@ -166,6 +191,9 @@ class AllowlistPolicy:
                 tool_name=tool_name,
                 server_id=sid,
             )
+        policy = argument_policy
+        if policy is None and srv.argument_policy is not None:
+            policy = ArgumentPolicy.from_dict(srv.argument_policy)
         if srv.audit_report:
             report = dict(srv.audit_report)
             # Persisted (possibly overridden) clearance is authoritative.
@@ -179,6 +207,10 @@ class AllowlistPolicy:
                 server_id=sid,
                 allowed_tools=srv.allowed_tools,
                 live_fingerprint=live_fingerprint,
+                arguments=arguments,
+                context=context,
+                argument_policy=policy,
+                server_tenant_id=srv.tenant_id,
             )
         # Allowlist entry without any audit report — enforce server clearance only.
         if not isinstance(tool_name, str) or not tool_name.strip():
@@ -200,12 +232,26 @@ class AllowlistPolicy:
                 tool_name=tool_name,
                 server_id=sid,
             )
-        return enforce_tool_call(
+        refused = check_identity(context, server_id=sid, tool_name=tool_name,
+                                 server_tenant_id=srv.tenant_id)
+        if refused:
+            return ToolCallDisposition(
+                status="blocked",
+                reason=refused,
+                clearance=ClearanceLevel.BLOCKED,
+                tool_name=tool_name,
+                server_id=sid,
+            )
+        return _decide_with_policy(
             server_clearance=srv.clearance,
             tool_clearance=srv.clearance,
             tool_name=tool_name,
             execution_mode=execution_mode,
             server_id=sid,
+            description="",
+            arguments=arguments,
+            context=context,
+            argument_policy=policy,
         )
 
 

@@ -3,6 +3,43 @@
 All notable changes to this project are listed here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.1.0 — 2026-11-25
+
+Additive: every 1.0 call keeps its result unless the host passes one of the new
+inputs and the call breaks a rule it declares.
+
+### Added
+
+- `CallContext`: the caller's capabilities (from the host's access control), tenant
+  and the agent's tool list. A call must pass all of them as well as the clearance.
+  `READ_ONLY` calls need `mcp:read`, other calls `mcp:write`
+  (`required_capability`).
+- Argument rules: `ArgumentPolicy`, `ToolArgumentSchema`, `ArgumentRule` and
+  `validate_arguments`. Strict types (a numeric string is not an integer and a
+  bool is not a number), floors and caps, length, byte and item limits, paths that
+  must resolve inside a workspace root, and recipient and domain allowlists for
+  email and URL arguments. A violation is `blocked` with a reason naming the
+  argument. A malformed rule refuses the call.
+- High-risk families (`detect_families`, `HIGH_RISK_FAMILIES`): file write or
+  delete, shell, email, outbound HTTP, office write-back. With a policy in force,
+  such a call under a name the policy does not declare is held for approval, and
+  a renamed tool whose arguments fit a declared schema of its family is checked
+  against that schema.
+- `enforce_from_report` and `AllowlistPolicy.evaluate` take `arguments`,
+  `context` and `argument_policy`. `AllowlistedServer` stores `tenant_id` and
+  `argument_policy`; both are serialised only when set, so a 1.0 policy
+  round-trips unchanged. A report dict may carry an `argument_policy`.
+- A server entry that names a tenant refuses a caller that names a different
+  tenant or none.
+- A built-in default pack (`DEFAULT_PACK`, `check_defaults`, `describe_defaults`)
+  for high-risk calls that have no schema under their own name, so an empty
+  `ArgumentPolicy()` protects with zero setup: path traversal, NUL, oversize
+  writes, header injection in recipients, non-http(s) URLs and URLs with
+  credentials are blocked; writes, shell, email and office write-back are held;
+  HTTP to a public host keeps its clearance and to a private host is held.
+  `ArgumentPolicy(defaults=False)` holds instead. A declared schema replaces the
+  defaults for its tool.
+
 ## 1.0.2 — 2026-11-23
 
 First public release.
