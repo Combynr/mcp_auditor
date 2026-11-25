@@ -1,9 +1,9 @@
 """1.1.1: tool annotations, the trust policy, read-context nouns and floor reasons.
 
-99 test cases: 61 fail on 1.1.0 (36a2fd2); the 38 that pass there are cases that must
+118 test cases: 68 fail on 1.1.0 (36a2fd2); the 50 that pass there are cases that must
 stay held or not READ_ONLY, plus read guards. Review r1 (amendment 1) added 42 cases (34
-of the 61 at that point fail on fb5e92f); review r2 (amendment 2) added 38 more, of
-which 33 fail on f2ee8c1 and 5 are read guards that pass everywhere. The tests named
+of the 61 at that point fail on fb5e92f); review r2 (amendment 2, final form) added 57
+more, of which 40 fail on f2ee8c1; the rest are read guards that hold as on 1.1.0. The tests named
 "guard" check properties the change must keep but use the new field, so they cannot
 run on 1.1.0.
 """
@@ -254,11 +254,14 @@ def test_a_trusted_read_only_hint_never_lowers_a_side_effect_word(name):
     assert risk.clearance is not ClearanceLevel.READ_ONLY, name
 
 
-# Finding 3: simple inflections of state words count.
+# Finding 3: -s/-es verb forms of state words count (final form of amendment 2: -ed and
+# -ing are not matched, so ordinary reads stay as on 1.1.0).
 @pytest.mark.parametrize("name,description", [
     ("get_post", "Fetches; then posts it"),
-    ("get_report", "Report is posted to the channel"),
-    ("list_jobs", "Lists jobs, committing any pending ones"),
+    ("get_report", "Builds the report and posts it to the channel"),
+    ("list_jobs", "Lists jobs and commits pending ones"),
+    ("get_branch", "Gets the branch and pushes it"),
+    ("view_pr", "Views the PR, then merges it"),
     ("show_calendar", "Shows the calendar and schedules a meeting"),
     ("get_status", "Gets status and updates the record"),
     ("view_queue", "Runs the next job"),
@@ -270,9 +273,8 @@ def test_an_inflected_state_word_in_the_description_is_held(name, description):
     assert risk.clearance is ClearanceLevel.DRAFT_ONLY, (name, description)
 
 
-@pytest.mark.parametrize("name", ["get_item_updates", "list_jobs_and_commits",
-                                  "show_report_posting", "read_file_writes",
-                                  "get_user_creates", "view_job_stopped"])
+@pytest.mark.parametrize("name", ["list_jobs_and_commits", "posts_list",
+                                  "get_and_sends", "fetch_then_pushes", "list_or_schedules"])
 def test_an_inflected_state_word_in_the_name_is_held(name):
     assert classify_tool(McpToolDescriptor(name=name)).clearance is ClearanceLevel.DRAFT_ONLY
 
@@ -287,3 +289,42 @@ def test_an_inflected_state_word_in_the_name_is_held(name):
 def test_an_inflected_noun_read_by_a_read_verb_stays_read_only(name, description):
     risk = classify_tool(McpToolDescriptor(name=name, description=description))
     assert risk.clearance is ClearanceLevel.READ_ONLY, (name, description)
+
+
+@pytest.mark.parametrize("name,description", [
+    ("get_rows", "Fetches rows, then deletes them"),
+    ("list_files", "Lists files and removes the old ones"),
+    ("get_account", "Gets the account and transfers the balance"),
+])
+def test_a_destructive_verb_form_in_the_description_is_destructive(name, description):
+    risk = classify_tool(McpToolDescriptor(name=name, description=description))
+    assert risk.category == "destructive", (name, description)
+
+
+@pytest.mark.parametrize("name,description", [
+    ("get_setting", "Read one setting"),
+    ("get_status", "Get the last updated time"),
+    ("list_items", "List created items"),
+    ("list_jobs", "List pending jobs"),
+])
+def test_guard_ed_and_ing_forms_keep_an_ordinary_read_read_only(name, description):
+    """As on 1.1.0 (these pass there): -ed and -ing forms are not verbs to match."""
+    risk = classify_tool(McpToolDescriptor(name=name, description=description))
+    assert risk.clearance is ClearanceLevel.READ_ONLY, (name, description)
+
+
+@pytest.mark.parametrize("name,description", [
+    ("get_item_updates", ""), ("show_report_posts", ""), ("list_charges", "List charges"),
+    ("get_payments", "Get payments"), ("list_refunds", "List refunds"),
+    ("list_formats", "List supported formats"), ("get_runs", "Get recent runs"),
+    ("get_updates", "Get latest updates"),
+])
+def test_guard_a_plural_noun_keeps_an_ordinary_read_read_only(name, description):
+    """As on 1.1.0 (these pass there): an -s form outside a verb position is a plural."""
+    risk = classify_tool(McpToolDescriptor(name=name, description=description))
+    assert risk.clearance is ClearanceLevel.READ_ONLY, (name, description)
+
+
+@pytest.mark.parametrize("name", ["deletes_rows", "get_and_removes", "list_then_purges"])
+def test_a_destructive_verb_form_in_the_name_is_destructive(name):
+    assert classify_tool(McpToolDescriptor(name=name)).category == "destructive", name
