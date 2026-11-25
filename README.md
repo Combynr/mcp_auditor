@@ -31,7 +31,7 @@ The distribution is named `mcp-auditor` and the import name is `mcp_auditor`. Th
 ```python
 from mcp_auditor import (
     AllowlistPolicy, AllowlistedServer, ClearanceLevel,
-    McpToolDescriptor, audit_tool_surface_sync, surface_fingerprint,
+    McpToolDescriptor, audit_tool_surface_sync, enforce_from_report, surface_fingerprint,
 )
 
 # The tools a server advertises (from tools/list, or built by hand).
@@ -117,6 +117,50 @@ Tool names are matched exactly: `GET_X` is not `get_x`. `enforce_from_report()` 
 - pass `live_fingerprint=surface_fingerprint(live_tools)` to `evaluate()`, which blocks calls until you re-audit, or
 - call `detect_drift(report, live_tools)`, which lists added and removed names. A report without a fingerprint counts as drift.
 
+### Caller, agent and argument rules (1.1)
+
+A host can narrow a call further. A call must pass every check it supplies, and none of them can widen another:
+
+1. **The caller's role**: `CallContext(capabilities=...)`, the capabilities the host's own access control grants. A `READ_ONLY` call needs `mcp:read`; anything else needs `mcp:write`; a declared schema can require one more. `tenant_id` must equal the server entry's `tenant_id` when the entry names one.
+2. **The agent's tool list**: `CallContext(agent_tools=...)`, as bare names, `server:tool` or `server:*`.
+3. **The clearance** described above.
+4. **Argument rules**: an `ArgumentPolicy` of `ToolArgumentSchema`s. Types are strict (`"2499"` is not an integer and `True` is not a number), numbers have floors and caps, strings have length and byte limits, arrays have item limits, `format="path"` must resolve inside the workspace root (symlinks included), and `format="email"` / `"url"` / `"domain"` must match an allowlist. Undeclared arguments are refused unless the schema sets `allow_additional`. A rule that cannot be parsed refuses the call.
+
+A call that breaks a rule is `blocked`, with a reason that names the argument; approval cannot override it. With a policy in force, a high-risk tool (file write or delete, shell, email, outbound HTTP, office write-back) that is not declared under its own name is held for approval. The family is detected from the name, the description and the call's own argument keys, so renaming a tool does not hide it, and a renamed tool whose arguments fit a declared schema of the same family is still checked against that schema. Each check runs only when its input is given, so 1.0 callers see no change.
+
+```python
+from mcp_auditor import ArgumentPolicy, ArgumentRule, CallContext, ToolArgumentSchema
+
+rules = ArgumentPolicy(
+    schemas=(
+        ToolArgumentSchema(
+            tool="send_email",
+            family="email",
+            arguments={
+                "to": ArgumentRule(type="array", required=True, max_items=5, items=ArgumentRule(
+                    type="string", format="email", allowed_domains=("example.com",))),
+                "body": ArgumentRule(type="string", max_bytes=10_000),
+            },
+        ),
+    ),
+)
+caller = CallContext(capabilities={"mcp:read", "mcp:write"}, agent_tools={"issues:*"})
+mail_report = {"recommended_clearance": "DRAFT_ONLY", "tools": []}
+
+def check(tool, arguments):
+    return enforce_from_report(
+        mail_report, tool_name=tool, execution_mode="AUTO", server_id="issues",
+        arguments=arguments, context=caller, argument_policy=rules,
+    )
+
+assert check("send_email", {"to": ["a@example.com"], "body": "hi"}).status == "requires_approval"
+assert check("send_email", {"to": ["a@elsewhere.test"]}).status == "blocked"
+# A bland new name with recipient arguments is still checked as email.
+assert check("notify", {"to": ["a@elsewhere.test"]}).status == "blocked"
+```
+
+`AllowlistPolicy.evaluate()` takes the same `arguments`, `context` and `argument_policy` keywords, and an `AllowlistedServer` can store its rules (`argument_policy`, an `ArgumentPolicy.to_dict()`) and its `tenant_id`.
+
 ## Optional: overseer hook
 
 An overseer is any callable, sync or async, that takes the tool list and returns `(verdict, rationale)`. The verdict is `SAFE`, `REVIEW`, `MALICIOUS` or `UNAVAILABLE`. The library ships the prompt and the parser, not an LLM client:
@@ -179,10 +223,11 @@ Enumeration follows `tools/list` pagination. `timeout_seconds` bounds the whole 
 
 ## Limitations
 
-- **The classifier is a heuristic over names and descriptions.** A destructive tool that is renamed and described blandly (for example `delete_all` exposed as `get_report`, "Returns the report") is classified `READ_ONLY`. Unrecognised verbs floor to `DRAFT_ONLY`, but a benign-looking name can still look read-only. The compensating controls are the overseer review and human clearance decisions. Neither is a proof of safety.
+- **The classifier is a heuristic over names and descriptions.** A destructive tool that is renamed and described blandly (for example `delete_all` exposed as `get_report`, "Returns the report") is classified `READ_ONLY`. Unrecognised verbs floor to `DRAFT_ONLY`, but a benign-looking name can still look read-only. The compensating controls are the overseer review, human clearance decisions and, from 1.1, an `ArgumentPolicy`, which holds a high-risk call that arrives under an undeclared name. Family detection is also a heuristic: a tool whose name, description and arguments carry no high-risk signal is not caught by it. None of these is a proof of safety.
+- **Path rules check the path string at decision time.** A path is resolved against the workspace root, symlinks included, when the call is decided; a link created between the decision and the server's own file access is outside what the library can see.
 - **camelCase names are one token.** `getIssue` matches no verb and gets `DRAFT_ONLY`. This is stricter than intended, not more open.
 - **The overseer reads text the server controls.** Tool descriptions can carry prompt injection. A `SAFE` verdict can never lower the clearance below the static result, but on a surface that already looks read-only it is what allows auto-approval. The library puts no time limit on the overseer call, so bound it in your callable.
-- **This is not a sandbox.** It decides whether a call may proceed. It does not inspect arguments or results, and it cannot see what a server does behind a tool name. A server can behave differently from what it advertises. Your host must call `evaluate()` on every execution path.
+- **This is not a sandbox.** It decides whether a call may proceed. Argument rules (1.1) check only the arguments a host declares; results are not inspected, and it cannot see what a server does behind a tool name. A server can behave differently from what it advertises. Your host must call `evaluate()` on every execution path.
 - **The fingerprint covers names, descriptions and input-schema property names only.** It does not cover property types or descriptions, output schemas or annotations.
 - **No persistence, approval inbox or audit log.** These belong to the host.
 - `McpServerTarget.to_dict()` includes `headers` and `env` verbatim. Do not log or persist it if they hold credentials.

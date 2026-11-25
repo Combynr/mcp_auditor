@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from .__version__ import __version__
 from .allowlist import AllowlistedServer, AllowlistPolicy
+from .arguments import ArgumentRule, ToolArgumentSchema, path_problem, validate_arguments
 from .audit import audit_tool_surface, audit_tool_surface_sync
+from .callpolicy import (
+    CAPABILITY_READ,
+    CAPABILITY_WRITE,
+    ArgumentPolicy,
+    CallContext,
+    required_capability,
+)
 from .classify import (
     ClassificationPolicy,
     DEFAULT_POLICY,
@@ -18,6 +26,7 @@ from .classify import (
     tokens,
 )
 from .enforce import enforce_from_report, enforce_tool_call
+from .families import HIGH_RISK_FAMILIES, detect_families
 from .fetch import audit_server, fetch_server_tools, serialize_tool_list
 from .overseer import (
     OverseerFn,
@@ -42,14 +51,21 @@ __all__ = [
     "__version__",
     "AllowlistPolicy",
     "AllowlistedServer",
+    "ArgumentPolicy",
+    "ArgumentRule",
+    "CAPABILITY_READ",
+    "CAPABILITY_WRITE",
+    "CallContext",
     "ClassificationPolicy",
     "ClearanceLevel",
     "DEFAULT_POLICY",
+    "HIGH_RISK_FAMILIES",
     "McpServerTarget",
     "McpToolDescriptor",
     "OverseerFn",
     "ServerAuditReport",
     "SurfaceDrift",
+    "ToolArgumentSchema",
     "ToolCallDisposition",
     "ToolRisk",
     "audit_server",
@@ -60,6 +76,7 @@ __all__ = [
     "classify_tools",
     "coerce_clearance",
     "detect_drift",
+    "detect_families",
     "enforce_from_report",
     "enforce_tool_call",
     "extract_response_text",
@@ -67,8 +84,11 @@ __all__ = [
     "max_clearance",
     "overseer_floor",
     "parse_overseer_text",
+    "path_problem",
+    "required_capability",
     "serialize_tool_list",
     "static_clearance",
     "surface_fingerprint",
     "tokens",
+    "validate_arguments",
 ]
