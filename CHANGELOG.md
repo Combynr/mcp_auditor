@@ -35,6 +35,10 @@ All notable changes to this project are listed here. The project follows
   or of the name, or right after `and`, `then`, `or`, `it`, ... So "Fetches; then posts
   it" is a write. Elsewhere an `-s` form is a plural and reads as in 1.1.0 ("List
   charges", "Search messages"). `-ed` and `-ing` forms are not matched.
+- When the read-context noun rule fires, every state or destructive word counts in any
+  form and position, except a plural right after a read verb or a noun-leading word
+  ("Get recent runs"). camelCase names are split to find more state and destructive
+  words, never read verbs. Clause breaks add `— – | / & 。`.
 - A `requires_approval` disposition for a `DRAFT_ONLY` effective clearance names the
   floor that held it: the server's clearance (with the audit's overseer verdict) or
   the tool's classification (with its signals). The reason no longer calls every such

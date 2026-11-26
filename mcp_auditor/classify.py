@@ -78,7 +78,19 @@ _INFLECTIONS = ("es", "s")
 _VERB_LEADERS = frozenset({"and", "then", "or", "also", "it", "which", "that", "who",
                            "this", "but", "so", "plus"})
 _NAME_JOINERS = frozenset({"and", "then", "or", "plus"})
-_CLAUSE_BREAK = re.compile(r"[.;:,!?()\[\]\n]")
+_CLAUSE_BREAK = re.compile(r"[.;:,!?()\[\]\n\u2014\u2013|/&\u3002\uff61]")
+# 1.1.1 (amendment 3): when the read-context noun rule has dropped the name's second
+# word, the tool's read status rests on that one guess, so every state or destructive
+# word counts in any form and any position. The one exception keeps a plural noun a
+# noun: an -s/-es form right after a read verb or after one of these words ("Lists
+# posts", "Get recent runs").
+_NOUN_LEADERS = frozenset({
+    "the", "a", "an", "all", "any", "each", "every", "some", "many", "few", "recent",
+    "latest", "last", "new", "newest", "old", "oldest", "my", "your", "our", "their",
+    "its", "his", "her", "s", "open", "closed", "pending", "upcoming", "past",
+    "previous", "top", "first", "of", "for", "by", "from", "with", "in", "on",
+})
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def _fold(text: str) -> str:
@@ -151,17 +163,23 @@ def classify_tool(
 ) -> ToolRisk:
     pol = policy or DEFAULT_POLICY
     tok = tokens(tool.name, tool.description)
-    parts = _name_words(tool.name)
-    destructive_hits = sorted(
-        _verb_form_hits(parts, pol.destructive_terms, _NAME_JOINERS)
-        | _description_hits(tool.description, pol.destructive_terms))
+    # camelCase is split only to find more state and destructive words; a read verb
+    # or read-context noun is still taken from the unsplit name, as in 1.1.0, so the
+    # split never lowers a tool ("getUser" stays "no recognised verb").
+    split_tok = tokens(_split_camel(tool.name), tool.description)
+    parts = _name_words(_split_camel(tool.name))
     nouns = _read_context_nouns(tool.name)
+    # Only when the noun rule fires does every form count anywhere (_NOUN_LEADERS).
+    strict = bool(nouns)
+    destructive_hits = sorted(
+        _verb_form_hits(parts, pol.destructive_terms, _NAME_JOINERS, strict=strict)
+        | _description_hits(tool.description, pol.destructive_terms, strict=strict))
     # The noun is dropped by POSITION (the name's second word) only: a later copy of it
     # in the name, and every state word in the description, still count.
     state_hits = sorted(
         _verb_form_hits(parts, pol.state_changing_terms, _NAME_JOINERS,
-                        skip=1 if nouns else None)
-        | _description_hits(tool.description, pol.state_changing_terms))
+                        skip=1 if nouns else None, strict=strict)
+        | _description_hits(tool.description, pol.state_changing_terms, strict=strict))
     hints = tool.annotations if isinstance(getattr(tool, "annotations", None), dict) else {}
     if hints.get("destructiveHint") is True and not destructive_hits:
         # Stricter is always allowed: a server saying its tool is destructive is heeded,
@@ -183,7 +201,7 @@ def classify_tool(
     name = tool.name if isinstance(tool.name, str) else ""
     if (pol.trust_annotations and hints.get("readOnlyHint") is True
             and hints.get("destructiveHint") is not True and name.isascii()
-            and not _inflected_hits(tok, HINT_NEVER_LOWERS)):
+            and not _inflected_hits(split_tok, HINT_NEVER_LOWERS)):
         return ToolRisk(
             name=tool.name,
             category="read_only",
@@ -231,6 +249,11 @@ def classify_tool(
     )
 
 
+def _split_camel(name: object) -> object:
+    """'get_post_thenPublish' -> 'get_post_then_Publish', so camelCase words count."""
+    return _CAMEL_BOUNDARY.sub("_", name) if isinstance(name, str) else name
+
+
 def _name_words(name: object) -> list[str]:
     """The tool name's folded words, in order."""
     if not isinstance(name, str):
@@ -252,28 +275,38 @@ def _inflected_hits(words, terms: frozenset[str]) -> set[str]:
 
 
 def _verb_form_hits(words: Sequence[str], terms: frozenset[str],
-                    leaders: frozenset[str], skip: int | None = None) -> set[str]:
+                    leaders: frozenset[str], skip: int | None = None,
+                    strict: bool = False) -> set[str]:
     """Terms among the words: an exact word anywhere, an -s/-es form only in a verb
-    position (first word, or right after a leader)."""
+    position (first word, or right after a leader). ``strict``: an -s/-es form counts
+    anywhere except right after a read verb or a _NOUN_LEADERS word."""
     hits: set[str] = set()
     for i, word in enumerate(words):
         if i == skip:
             continue
         if word in terms:
             hits.add(word)
-        elif i == 0 or words[i - 1] in leaders:
+        elif i == 0:
+            hits |= _inflected_hits((word,), terms)
+        elif strict:
+            prev = words[i - 1]
+            if prev not in _NOUN_LEADERS and not _inflected_hits((prev,), READ_CONTEXT_VERBS):
+                hits |= _inflected_hits((word,), terms)
+        elif words[i - 1] in leaders:
             hits |= _inflected_hits((word,), terms)
     return hits
 
 
-def _description_hits(description: object, terms: frozenset[str]) -> set[str]:
+def _description_hits(description: object, terms: frozenset[str],
+                      strict: bool = False) -> set[str]:
     """Terms in a description, clause by clause ("Fetches; then posts it" counts
     "post"; "Search messages" and "List charges" name what is read)."""
     if not isinstance(description, str):
         return set()
     hits: set[str] = set()
     for clause in _CLAUSE_BREAK.split(_fold(description)):
-        hits |= _verb_form_hits(_TOKEN_PATTERN.findall(clause), terms, _VERB_LEADERS)
+        hits |= _verb_form_hits(_TOKEN_PATTERN.findall(clause), terms, _VERB_LEADERS,
+                                strict=strict)
     return hits
 
 

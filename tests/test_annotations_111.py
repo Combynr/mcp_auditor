@@ -1,11 +1,12 @@
 """1.1.1: tool annotations, the trust policy, read-context nouns and floor reasons.
 
-118 test cases: 68 fail on 1.1.0 (36a2fd2); the 50 that pass there are cases that must
-stay held or not READ_ONLY, plus read guards. Review r1 (amendment 1) added 42 cases (34
-of the 61 at that point fail on fb5e92f); review r2 (amendment 2, final form) added 57
-more, of which 40 fail on f2ee8c1; the rest are read guards that hold as on 1.1.0. The tests named
-"guard" check properties the change must keep but use the new field, so they cannot
-run on 1.1.0.
+Cases by origin (counts measured with this file copied onto each base):
+
+- 1.1.1 as first written (fb5e92f) plus amendments 1-3: see the section headers.
+- "guard" tests check properties the change must keep. Read guards ("stays READ_ONLY
+  as on 1.1.0") pass on 1.1.0; guards that use the new annotations field cannot run
+  there.
+- Counts per base are recorded in the engine's docs/RFC-6200m1-CHANGES.md.
 """
 from __future__ import annotations
 
@@ -328,3 +329,41 @@ def test_guard_a_plural_noun_keeps_an_ordinary_read_read_only(name, description)
 @pytest.mark.parametrize("name", ["deletes_rows", "get_and_removes", "list_then_purges"])
 def test_a_destructive_verb_form_in_the_name_is_destructive(name):
     assert classify_tool(McpToolDescriptor(name=name)).category == "destructive", name
+
+
+# amendment 3 (review r3) -------------------------------------------------------------------
+
+# When the read-context noun rule fires, every state or destructive word counts in any
+# form and position (except a plural right after a read verb or a noun-leading word).
+@pytest.mark.parametrize("name,description", [
+    ("get_post", "Fetches the draft and immediately posts it"),
+    ("get_post", "Fetches the draft \u2014 posts it"),
+    ("get_post", "Fetches the draft\uff61 posts it"),
+    ("get_run", "Returns runs and reruns them"),
+    ("get_post_posts", ""),
+    ("get_post_sends", ""),
+    ("get_run_merges", ""),
+])
+def test_a_noun_rule_read_is_held_by_a_state_word_in_any_form(name, description):
+    risk = classify_tool(McpToolDescriptor(name=name, description=description))
+    assert risk.clearance is not ClearanceLevel.READ_ONLY, (name, description)
+
+
+@pytest.mark.parametrize("name", ["get_post_thenPublish", "list_itemsThenDelete"])
+def test_a_camel_case_word_in_the_name_counts(name):
+    assert classify_tool(McpToolDescriptor(name=name)).clearance \
+        is not ClearanceLevel.READ_ONLY, name
+
+
+def test_guard_the_camel_case_split_never_lowers_a_name():
+    """As on 1.1.0: a read verb inside a camelCase word is not found by the split."""
+    for name in ("getUser", "listOrders", "getSchedule"):
+        assert classify_tool(McpToolDescriptor(name=name)).clearance \
+            is ClearanceLevel.DRAFT_ONLY, name
+
+
+@pytest.mark.parametrize("mark", ["\u2014", "\u2013", "|", "/", "&", "\u3002", "\uff61", "\n"])
+def test_more_marks_break_a_description_clause(mark):
+    risk = classify_tool(McpToolDescriptor(name="get_report",
+                                           description=f"Builds the report{mark}posts it"))
+    assert risk.clearance is ClearanceLevel.DRAFT_ONLY, repr(mark)
