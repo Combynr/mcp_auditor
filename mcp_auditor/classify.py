@@ -163,22 +163,35 @@ def classify_tool(
 ) -> ToolRisk:
     pol = policy or DEFAULT_POLICY
     tok = tokens(tool.name, tool.description)
-    # camelCase is split only to find more state and destructive words; a read verb
-    # or read-context noun is still taken from the unsplit name, as in 1.1.0, so the
-    # split never lowers a tool ("getUser" stays "no recognised verb").
+    # camelCase splitting only ADDS words: state, destructive and HINT_NEVER_LOWERS
+    # words are looked for in the unsplit name (lowercased, as in 1.1.0) AND in the
+    # split one, so "deLete" still counts as "delete". A read verb or read-context noun
+    # is still taken from the unsplit name only, so the split never lowers a tool
+    # ("getUser" stays "no recognised verb").
     split_tok = tokens(_split_camel(tool.name), tool.description)
-    parts = _name_words(_split_camel(tool.name))
+    write_tok = tok | split_tok
+    parts = _name_words(tool.name)
+    split_parts = _name_words(_split_camel(tool.name))
     nouns = _read_context_nouns(tool.name)
     # Only when the noun rule fires does every form count anywhere (_NOUN_LEADERS).
     strict = bool(nouns)
-    destructive_hits = sorted(
-        _verb_form_hits(parts, pol.destructive_terms, _NAME_JOINERS, strict=strict)
-        | _description_hits(tool.description, pol.destructive_terms, strict=strict))
     # The noun is dropped by POSITION (the name's second word) only: a later copy of it
-    # in the name, and every state word in the description, still count.
+    # in the name, and every state word in the description, still count. In the split
+    # words the position is dropped only if the split left the first two words alone.
+    skip = 1 if nouns else None
+    split_skip = skip if split_parts[:2] == parts[:2] else None
+
+    def name_hits(terms, use_skip):
+        return (_verb_form_hits(parts, terms, _NAME_JOINERS,
+                                skip=skip if use_skip else None, strict=strict)
+                | _verb_form_hits(split_parts, terms, _NAME_JOINERS,
+                                  skip=split_skip if use_skip else None, strict=strict))
+
+    destructive_hits = sorted(
+        name_hits(pol.destructive_terms, False)
+        | _description_hits(tool.description, pol.destructive_terms, strict=strict))
     state_hits = sorted(
-        _verb_form_hits(parts, pol.state_changing_terms, _NAME_JOINERS,
-                        skip=1 if nouns else None, strict=strict)
+        name_hits(pol.state_changing_terms, True)
         | _description_hits(tool.description, pol.state_changing_terms, strict=strict))
     hints = tool.annotations if isinstance(getattr(tool, "annotations", None), dict) else {}
     if hints.get("destructiveHint") is True and not destructive_hits:
@@ -201,7 +214,7 @@ def classify_tool(
     name = tool.name if isinstance(tool.name, str) else ""
     if (pol.trust_annotations and hints.get("readOnlyHint") is True
             and hints.get("destructiveHint") is not True and name.isascii()
-            and not _inflected_hits(split_tok, HINT_NEVER_LOWERS)):
+            and not _inflected_hits(write_tok, HINT_NEVER_LOWERS)):
         return ToolRisk(
             name=tool.name,
             category="read_only",

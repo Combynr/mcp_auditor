@@ -367,3 +367,58 @@ def test_more_marks_break_a_description_clause(mark):
     risk = classify_tool(McpToolDescriptor(name="get_report",
                                            description=f"Builds the report{mark}posts it"))
     assert risk.clearance is ClearanceLevel.DRAFT_ONLY, repr(mark)
+
+
+# amendment 4 (review r4) -------------------------------------------------------------------
+
+# Finding 1: camelCase splitting only adds words; a mixed-case exact word still counts.
+@pytest.mark.parametrize("name", ["get_rows_deLete", "list_items_dEleTe", "get_user_wiPe"])
+def test_a_mixed_case_destructive_word_is_destructive(name):
+    assert classify_tool(McpToolDescriptor(name=name)).category == "destructive", name
+
+
+@pytest.mark.parametrize("name", ["get_x_seNd", "read_file_wRite", "get_post_puBlish",
+                                  "get_job_rUn"])
+def test_a_mixed_case_state_word_is_held(name):
+    assert classify_tool(McpToolDescriptor(name=name)).clearance is ClearanceLevel.DRAFT_ONLY
+
+
+def test_a_mixed_case_destructive_verb_is_blocked_under_block_destructive():
+    risk = classify_tool(McpToolDescriptor(name="deLete_rows"),
+                         ClassificationPolicy(block_destructive=True))
+    assert risk.category == "destructive" and risk.clearance is ClearanceLevel.BLOCKED
+
+
+@pytest.mark.parametrize("name", ["deLete_rows", "seNd_report", "synC_calendar", "uPload_file"])
+def test_a_trusted_hint_never_lowers_a_mixed_case_protected_word(name):
+    risk = classify_tool(_tool(name, **READ_HINT), _trusted())
+    assert risk.clearance is not ClearanceLevel.READ_ONLY, name
+
+
+def _inner_capital_variants(term):
+    return [term[:i] + term[i].upper() + term[i + 1:] for i in range(1, len(term))]
+
+
+def test_no_single_inner_capital_variant_of_a_term_reads_as_read_only():
+    """The reviewer's r4 sweep: 1.1.0 lowercased names, so it held every one of these."""
+    from mcp_auditor.classify import (DEFAULT_DESTRUCTIVE_TERMS,
+                                      DEFAULT_STATE_CHANGING_TERMS)
+    lowered = []
+    for term in sorted(DEFAULT_STATE_CHANGING_TERMS | DEFAULT_DESTRUCTIVE_TERMS):
+        for word in _inner_capital_variants(term):
+            for verb in ("get", "list", "read"):
+                risk = classify_tool(McpToolDescriptor(name=f"{verb}_rows_{word}"))
+                if risk.clearance is ClearanceLevel.READ_ONLY or (
+                        term in DEFAULT_DESTRUCTIVE_TERMS and risk.category != "destructive"):
+                    lowered.append(f"{verb}_rows_{word}")
+    assert lowered == []
+
+
+def test_no_trusted_hint_lowers_a_mixed_case_protected_word():
+    from mcp_auditor.classify import DEFAULT_DESTRUCTIVE_TERMS, HINT_NEVER_LOWERS
+    lowered = [f"{word}_rows"
+               for term in sorted(DEFAULT_DESTRUCTIVE_TERMS | HINT_NEVER_LOWERS)
+               for word in _inner_capital_variants(term)
+               if classify_tool(_tool(f"{word}_rows", **READ_HINT), _trusted()).clearance
+               is ClearanceLevel.READ_ONLY]
+    assert lowered == []

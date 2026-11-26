@@ -89,7 +89,9 @@ From 1.1.1, state and destructive words also match their third-person `-s`/`-es`
 
 When the read-context noun rule has dropped a name's second word, the tool's read status rests on that one guess, so every state or destructive word then counts in any form and position, in the name and the description (`get_post` described as "Fetches the draft and immediately posts it", `get_post_sends` and `get_run_merges` are `DRAFT_ONLY`). The one exception keeps a plural a noun: an `-s` form right after a read verb or a noun-leading word such as `the`, `all`, `recent`, `latest`, `of` ("Lists posts by author", "Get recent runs").
 
-camelCase in a name is split to find more state and destructive words (`get_post_thenPublish`, `list_itemsThenDelete` are held). A read verb inside a camelCase word is not used, so the split never lowers a name (`getUser` stays `DRAFT_ONLY`, as in 1.1.0).
+camelCase in a name is split only to add words: state, destructive and `HINT_NEVER_LOWERS` words are looked for in the unsplit, lowercased name (as in 1.1.0) and in the split one, so `get_post_thenPublish` and `list_itemsThenDelete` are held and a mixed-case `deLete_rows` is still destructive. A read verb or read-context noun is taken from the unsplit name only, so the split never lowers a name (`getUser` stays `DRAFT_ONLY`, as in 1.1.0).
+
+The noun-leading exception is lexical: with the noun rule active, an `-s` verb placed after such a word reads as a plural (`get_post` described as "Fetches the latest posts it" or "Gets the draft and its posts" is `READ_ONLY`). 1.1.0 held these only through the name's own noun; descriptions were never a boundary against a server that lies (`fetch_draft`, "Gets a draft", is `READ_ONLY` on 1.1.0).
 
 ### Tool annotations (1.1.1)
 

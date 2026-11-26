@@ -37,8 +37,9 @@ All notable changes to this project are listed here. The project follows
   charges", "Search messages"). `-ed` and `-ing` forms are not matched.
 - When the read-context noun rule fires, every state or destructive word counts in any
   form and position, except a plural right after a read verb or a noun-leading word
-  ("Get recent runs"). camelCase names are split to find more state and destructive
-  words, never read verbs. Clause breaks add `— – | / & 。`.
+  ("Get recent runs"). camelCase names are split to add state, destructive and
+  `HINT_NEVER_LOWERS` words, never to replace the unsplit lowercased words (a
+  mixed-case `deLete_rows` stays destructive) and never to find read verbs. Clause breaks add `— – | / & 。`.
 - A `requires_approval` disposition for a `DRAFT_ONLY` effective clearance names the
   floor that held it: the server's clearance (with the audit's overseer verdict) or
   the tool's classification (with its signals). The reason no longer calls every such
