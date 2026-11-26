@@ -10,22 +10,28 @@ from .types import McpToolDescriptor, ServerAuditReport
 
 
 def surface_fingerprint(tools: Sequence[McpToolDescriptor]) -> str:
-    """Stable hash of advertised tool names + descriptions + schema property keys."""
+    """Stable hash of advertised tool names + descriptions + schema property keys
+    (+ annotation hints, when a tool has any: 1.1.1)."""
     payload = []
     for tool in tools:
         schema = tool.input_schema or {}
         props = schema.get("properties") if isinstance(schema, dict) else None
         prop_keys = sorted(props.keys()) if isinstance(props, dict) else []
-        payload.append(
-            {
-                "name": str(tool.name or ""),
-                "description": str(tool.description or ""),
-                "props": prop_keys,
-            }
-        )
+        entry = {
+            "name": str(tool.name or ""),
+            "description": str(tool.description or ""),
+            "props": prop_keys,
+        }
+        hints = getattr(tool, "annotations", None)
+        if hints:
+            # 1.1.1: annotations can change a classification, so a change to them is
+            # drift. Only when present, so a surface without them hashes as in 1.1.0.
+            entry["annotations"] = {k: bool(v) for k, v in sorted(dict(hints).items())}
+        payload.append(entry)
     # Sorting the entries (not the inputs) keeps the hash independent of input
     # order even when a server advertises the same name twice.
-    payload.sort(key=lambda e: (e["name"], e["description"], e["props"]))
+    payload.sort(key=lambda e: (e["name"], e["description"], e["props"],
+                                sorted((e.get("annotations") or {}).items())))
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

@@ -83,6 +83,26 @@ A longer example is in [`examples/basic_audit.py`](examples/basic_audit.py).
 
 Destructive verbs win over read-only ones, so `list_and_delete` is destructive. Hosts can add terms with `ClassificationPolicy().with_extra(...)`.
 
+From 1.1.1, a few state verbs that are also nouns (`schedule`, `message`, `email`, `post`, `run`, `commit`, `merge`) count as the thing read in one shape only: the name's first word is `list`, `get`, `show`, `read`, `view`, `describe`, `fetch` or `search`, and the noun (or its `-s` form, `list_messages`) is its second word. Only that position of the name is dropped: a later copy of the noun (`get_post_and_post`), any other state word in the name, and every state verb in the description still count. So `get_schedule` and `list_message_threads` are `READ_ONLY`, while `schedule_meeting`, `get_and_schedule`, `check_schedule`, `status_post`, `list_run_via_message`, and `get_post` described as "post the draft publicly" stay `DRAFT_ONLY`. A description that mentions the noun ("Get the team's schedule") also keeps the tool `DRAFT_ONLY`: a server writes both name and description, so the rule never trusts the description.
+
+From 1.1.1, state and destructive words also match their third-person `-s`/`-es` verb forms (`posts`, `sends`, `merges`, `pushes`, `deletes`), but only in a verb position: the first word of a description clause (clauses split at `. ; : , ! ? ( ) [ ] — – | / & 。` and newlines) or of the name, or right after a word that leads a verb (in a description `and`, `then`, `or`, `also`, `it`, `which`, `that`, `who`, `this`, `but`, `so`, `plus`; in a name `and`, `then`, `or`, `plus`). So `get_post` described as "Fetches; then posts it" is `DRAFT_ONLY`, and "Fetches rows, then deletes them" is destructive. Elsewhere an `-s` form is a plural noun and reads as in 1.1.0: "Search messages", "List charges", `get_payments`, "Get recent runs" stay `READ_ONLY`. `-ed` and `-ing` forms are never matched ("Get the last updated time", "List created items", `get_setting` stay `READ_ONLY`). The exact word counts anywhere, as in 1.1.0.
+
+When the read-context noun rule has dropped a name's second word, the tool's read status rests on that one guess, so every state or destructive word then counts in any form and position, in the name and the description (`get_post` described as "Fetches the draft and immediately posts it", `get_post_sends` and `get_run_merges` are `DRAFT_ONLY`). The one exception keeps a plural a noun: an `-s` form right after a read verb or a noun-leading word such as `the`, `all`, `recent`, `latest`, `of` ("Lists posts by author", "Get recent runs").
+
+camelCase in a name is split only to add words: state, destructive and `HINT_NEVER_LOWERS` words are looked for in the unsplit, lowercased name (as in 1.1.0) and in the split one, so `get_post_thenPublish` and `list_itemsThenDelete` are held and a mixed-case `deLete_rows` is still destructive. A read verb or read-context noun is taken from the unsplit name only, so the split never lowers a name (`getUser` stays `DRAFT_ONLY`, as in 1.1.0).
+
+The noun-leading exception is lexical: with the noun rule active, an `-s` verb placed after such a word reads as a plural (`get_post` described as "Fetches the latest posts it" or "Gets the draft and its posts" is `READ_ONLY`). 1.1.0 held these only through the name's own noun; descriptions were never a boundary against a server that lies (`fetch_draft`, "Gets a draft", is `READ_ONLY` on 1.1.0).
+
+### Tool annotations (1.1.1)
+
+`McpToolDescriptor.annotations` keeps the MCP hints a server advertises (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; booleans only). They are the server's own claims, so they can make a tool stricter but never more open, unless an administrator trusts the server:
+
+- `destructiveHint: true` always makes the tool destructive, also next to `readOnlyHint: true` (contradictory hints get the stricter reading).
+- `readOnlyHint: true` lowers a state-changing or unrecognised tool to `READ_ONLY` only with `ClassificationPolicy(trust_annotations=True)`, which a host should pass only when auditing a server an administrator marked trusted. Destructive verbs, `destructiveHint: true` and non-ASCII names are never lowered, and neither is a tool whose name or description has an outbound or side-effect word, or its `-s`/`-es` form anywhere (`HINT_NEVER_LOWERS`: `send`, `publish`, `post`, `email`, `notify`, `share`, `delete`, `create`, `update`, `write`, `run`, `merge`, `commit`, `message`, `push`, `deploy`, `upload`, `grant`, `revoke`, `invite`, `approve`, `trigger`, `submit`, `execute`, `install`, `uninstall`, `transfer`, `pay`, `assign`, `move`, `rename`, `archive`, `restore`, `cancel`, `book`, `schedule`, `set`, `add`, `remove`, `reply`, `forward`, `sync`, `import`, `export`).
+- Annotations are part of the surface fingerprint when a tool has any, so changing them is drift. A server that advertises annotations audited under 1.1.0 fingerprints differently under 1.1.1 and must be re-audited once.
+
+A server's clearance still applies on top: a tool classified `READ_ONLY` on a server whose overseer verdict was `SKIPPED` is held for approval. From 1.1.1, the `requires_approval` reason says which floor held the call (the server's clearance, with its overseer verdict, or the tool's classification, with its signals).
+
 ### Clearance levels
 
 | Level | When | Effect on a call |
@@ -230,7 +250,7 @@ Enumeration follows `tools/list` pagination. `timeout_seconds` bounds the whole 
 - **camelCase names are one token.** `getIssue` matches no verb and gets `DRAFT_ONLY`. This is stricter than intended, not more open.
 - **The overseer reads text the server controls.** Tool descriptions can carry prompt injection. A `SAFE` verdict can never lower the clearance below the static result, but on a surface that already looks read-only it is what allows auto-approval. The library puts no time limit on the overseer call, so bound it in your callable.
 - **This is not a sandbox.** It decides whether a call may proceed. Argument rules (1.1) check only the arguments a host declares; results are not inspected, and it cannot see what a server does behind a tool name. A server can behave differently from what it advertises. Your host must call `evaluate()` on every execution path.
-- **The fingerprint covers names, descriptions and input-schema property names only.** It does not cover property types or descriptions, output schemas or annotations.
+- **The fingerprint covers names, descriptions, input-schema property names and (1.1.1) annotation hints only.** It does not cover property types or descriptions or output schemas.
 - **No persistence, approval inbox or audit log.** These belong to the host.
 - `McpServerTarget.to_dict()` includes `headers` and `env` verbatim. Do not log or persist it if they hold credentials.
 

@@ -26,11 +26,15 @@ def enforce_tool_call(
     tool_name: str,
     execution_mode: str,
     server_id: str = "",
+    server_floor: str = "",
+    tool_floor: str = "",
 ) -> ToolCallDisposition:
     """Decide auto-approve / require approval / block for one call.
 
     Only an effective ``READ_ONLY`` clearance in ``AUTO`` mode is auto-approved;
-    every other combination needs a human or is refused.
+    every other combination needs a human or is refused. 1.1.1: a held call's reason
+    names the floor that applied, the server's clearance or the tool's classification
+    (``server_floor`` / ``tool_floor`` add why, when the caller knows).
     """
     effective = max_clearance(server_clearance, tool_clearance)
 
@@ -46,9 +50,8 @@ def enforce_tool_call(
     if effective is not ClearanceLevel.READ_ONLY:
         return ToolCallDisposition(
             status="requires_approval",
-            reason=(
-                "DRAFT_ONLY clearance: mutating MCP tool call requires human approval."
-            ),
+            reason=_floor_reason(server_clearance, tool_clearance,
+                                 server_floor, tool_floor),
             clearance=effective,
             tool_name=tool_name,
             server_id=server_id,
@@ -70,6 +73,21 @@ def enforce_tool_call(
         tool_name=tool_name,
         server_id=server_id,
     )
+
+
+def _floor_reason(server_clearance: ClearanceLevel, tool_clearance: ClearanceLevel,
+                  server_floor: str, tool_floor: str) -> str:
+    """Which floor holds the call at DRAFT_ONLY. 1.1.0 always said "mutating", which
+    misled when a read-only tool was held by its server's clearance."""
+    parts = []
+    if coerce_clearance(server_clearance) is not ClearanceLevel.READ_ONLY:
+        parts.append("the server's clearance is DRAFT_ONLY"
+                     + (f" ({server_floor})" if server_floor else ""))
+    if coerce_clearance(tool_clearance) is not ClearanceLevel.READ_ONLY:
+        parts.append("the tool is classified DRAFT_ONLY"
+                     + (f" ({tool_floor})" if tool_floor else ""))
+    return ("DRAFT_ONLY clearance: this MCP tool call requires human approval. Floor: "
+            + ("; ".join(parts) or "DRAFT_ONLY") + ".")
 
 
 def _blocked(reason: str, tool_name: Any, server_id: str) -> ToolCallDisposition:
@@ -172,9 +190,18 @@ def enforce_from_report(
     if matches:
         # Duplicate names in an advertised surface: the strictest entry wins.
         tool_clearance = max_clearance(*matches)
+        tool_floor = "; ".join(str(sig) for tool in entries
+                               for sig in (tool.get("signals") or [])
+                               if isinstance(sig, str))[:300]
     else:
         # A tool missing from the audited surface is never auto-approved.
         tool_clearance = max_clearance(server_clearance, ClearanceLevel.DRAFT_ONLY)
+        tool_floor = "not in the audited tool surface"
+    verdict = str(report.get("overseer_verdict") or "")
+    server_floor = ("as stored for the server; its audit's overseer verdict was " + verdict
+                    + (", which floors a server to DRAFT_ONLY"
+                       if verdict in ("SKIPPED", "UNAVAILABLE", "REVIEW") else "")
+                    ) if verdict else "as stored for the server"
     return _decide_with_policy(
         server_clearance=server_clearance,
         tool_clearance=tool_clearance,
@@ -185,6 +212,8 @@ def enforce_from_report(
         arguments=arguments,
         context=context,
         argument_policy=_policy_for(report, argument_policy),
+        server_floor=server_floor,
+        tool_floor=tool_floor,
     )
 
 
@@ -207,6 +236,8 @@ def _decide_with_policy(
     arguments: Any,
     context: CallContext | None,
     argument_policy: ArgumentPolicy | None,
+    server_floor: str = "",
+    tool_floor: str = "",
 ) -> ToolCallDisposition:
     """The 1.0 decision, then the 1.1 argument and capability checks on top of it."""
     base = enforce_tool_call(
@@ -215,6 +246,8 @@ def _decide_with_policy(
         tool_name=tool_name,
         execution_mode=execution_mode,
         server_id=server_id,
+        server_floor=server_floor,
+        tool_floor=tool_floor,
     )
     if base.status == "blocked" or (argument_policy is None and context is None):
         return base

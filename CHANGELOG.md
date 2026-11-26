@@ -3,6 +3,52 @@
 All notable changes to this project are listed here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.1.1 — 2026-11-25
+
+### Added
+
+- `McpToolDescriptor.annotations`: the MCP tool annotation hints (`readOnlyHint`,
+  `destructiveHint`, `idempotentHint`, `openWorldHint`), booleans only, read by
+  `serialize_tool_list` and serialised only when present.
+- `ClassificationPolicy.trust_annotations` (default `False`). Only for a server an
+  administrator marked trusted: its `readOnlyHint: true` lowers a state-changing or
+  unrecognised tool to `READ_ONLY`. Destructive verbs, `destructiveHint: true` and
+  non-ASCII names are never lowered, nor are names or descriptions with an outbound or
+  side-effect word or its `-s`/`-es` form (`HINT_NEVER_LOWERS`, 44 words: `send`,
+  `publish`, `post`, `email`, `message`, `push`, `deploy`, `upload`, `grant`, `sync`,
+  `export`, ... see the README). Untrusted, annotations only
+  make a tool stricter (`destructiveHint: true` makes it destructive, also next to
+  `readOnlyHint: true`).
+
+### Changed
+
+- Read-verb context: `schedule`, `message`, `email`, `post`, `run`, `commit` or
+  `merge` as the second word of a name whose first word is `list`, `get`, `show`,
+  `read`, `view`, `describe`, `fetch` or `search` (`get_schedule`) names what is read,
+  not an action. Only that position of the name is dropped: a later copy of the noun
+  (`get_post_and_post`), state verbs in the description and later state words in the
+  name still count, so `get_post` described as "post the
+  draft publicly", `check_schedule`, `status_post` and `get_and_schedule` stay
+  `DRAFT_ONLY`.
+- State and destructive words match their third-person `-s`/`-es` verb forms
+  (`posts`, `deletes`) in a verb position only: the first word of a description clause
+  or of the name, or right after `and`, `then`, `or`, `it`, ... So "Fetches; then posts
+  it" is a write. Elsewhere an `-s` form is a plural and reads as in 1.1.0 ("List
+  charges", "Search messages"). `-ed` and `-ing` forms are not matched.
+- When the read-context noun rule fires, every state or destructive word counts in any
+  form and position, except a plural right after a read verb or a noun-leading word
+  ("Get recent runs"). camelCase names are split to add state, destructive and
+  `HINT_NEVER_LOWERS` words, never to replace the unsplit lowercased words (a
+  mixed-case `deLete_rows` stays destructive) and never to find read verbs. Clause breaks add `— – | / & 。`.
+- A `requires_approval` disposition for a `DRAFT_ONLY` effective clearance names the
+  floor that held it: the server's clearance (with the audit's overseer verdict) or
+  the tool's classification (with its signals). The reason no longer calls every such
+  call "mutating"; it still says "requires human approval".
+- The surface fingerprint includes a tool's annotation hints when it has any.
+  **Upgrade note:** a server that advertises annotations, audited under 1.1.0, now
+  fingerprints differently and must be re-audited once before a live-fingerprint
+  check passes. Surfaces without annotations hash as before.
+
 ## 1.1.0 — 2026-11-25
 
 Additive: every 1.0 call keeps its result unless the host passes one of the new
